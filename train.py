@@ -32,7 +32,7 @@ parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.001, type=float, help='start learning rate')
 parser.add_argument('--epochs', default=200, type=int, help='number of epochs')
 parser.add_argument('--decrease_from', default=100, type=int, help='Epoch to decrease from')
-parser.add_argument('--ckpt', default='./ckpt', help='Checkpoint file')
+parser.add_argument('--log_dir', help='Directory for logging')
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
 parser.add_argument('--model', '-m', default='ResNet18', help='Model')
 args = parser.parse_args()
@@ -66,7 +66,7 @@ if args.resume:
     # Load checkpoint.
     print('==> Resuming from checkpoint..')
     assert os.path.isfile(args.resume), 'Error: no checkpoint directory found!'
-    checkpoint = torch.load(args.ckpt)
+    checkpoint = torch.load('{}/best_model'.format(args.log_dir))
     net = checkpoint['net']
     best_acc = checkpoint['test_accuracy']
     start_epoch = checkpoint['epoch']
@@ -75,8 +75,7 @@ if args.resume:
     raise NotImplementedError('Add optimizer initialization!!!')
 else:
     print('==> Building model..')
-    get_net = lambda name: class_for_name('models', name)
-    net = get_net(args.model)()
+    net = class_for_name('models', args.model)()
 
 if use_cuda:
     net.cuda()
@@ -86,14 +85,14 @@ if use_cuda:
 criterion = nn.CrossEntropyLoss().cuda()
 optimizer = optim.Adam(net.parameters(), lr=0.001)
 
-with open('models/ResNet18_log', 'w') as f:
+with open('{}/log'.format(args.log_dir), 'w') as f:
     f.write('epoch,loss,train_acc,test_acc\n')
 
 
-def save_checkpoint(state, is_best, filename='/home/andrew/models/ResNet18_checpoint'):
-    torch.save(state, filename)
+def save_checkpoint(state, is_best):
+    torch.save(state, '{}/model'.format(args.log_dir))
     if is_best:
-        shutil.copyfile(filename, '/home/andrew/models/ResNet18_best')
+        shutil.copyfile('{}/model'.format(args.log_dir), '{}/best_model'.format(args.log_dir))
 
 
 def logit2acc(outputs, targets):
@@ -136,7 +135,6 @@ for epoch in range(200):  # loop over the dataset multiple times
         optimizer.step()
         training_loss += loss.cpu().data.numpy()[0]
 
-    print('Epoch %d time: %.4f loss: %.4f training acc: %.4f' % (epoch, time() - t0, training_loss, np.mean(accs)))
     train_acc = np.mean(accs)
     accs = []
     net.eval()
@@ -146,17 +144,19 @@ for epoch in range(200):  # loop over the dataset multiple times
         outputs = net(inputs)
         accs.append(logit2acc(outputs, labels))  # probably a bad way to calculate accuracy
 
-    print('validation accuracy: %.4f' % (np.mean(accs)))
+
+    print(' -- Epoch %d time: %.4f loss: %.4f training acc: %.4f, validation accuracy: %.4f --' %
+          (epoch, time() - t0, training_loss, train_acc, np.mean(accs)))
 
     save_checkpoint({
         'epoch': epoch + 1,
         'state_dict': net.state_dict(),
         'test_accuracy': np.mean(accs),
         'optimizer': optimizer.state_dict(),
-        'net': net.module if use_cuda else net,
+        'net': net.mdule if use_cuda else net,
     }, prev_test_acc < np.mean(accs))
 
-    with open('models/ResNet18_log', 'a') as f:
+    with open('{}/log'.format(args.log_dir), 'a') as f:
         f.write('{},{},{},{}\n'.format(epoch, training_loss, train_acc, np.mean(accs)))
 
     prev_test_acc = np.mean(accs)
