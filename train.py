@@ -4,6 +4,7 @@ from __future__ import print_function
 import torch
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
+from utils import AccCounter
 
 import torchvision
 import torchvision.transforms as transforms
@@ -113,13 +114,16 @@ def lr_linear(epoch, k):
 
 
 prev_test_acc = 0
+counter = AccCounter()
 
 for epoch in range(200):  # loop over the dataset multiple times
+    counter.flush()
+
     t0 = time()
     adjust_learning_rate(optimizer, lr_linear(epoch, 1e-3))
     net.train()
     training_loss = 0
-    accs = []
+    # accs = []
     for i, (inputs, labels) in enumerate(trainloader, 0):
         # wrap data in Variable and put them on GPU
         inputs, labels = Variable(inputs.cuda(async=True)), Variable(labels.cuda(async=True))
@@ -129,36 +133,38 @@ for epoch in range(200):  # loop over the dataset multiple times
 
         # forward + backward + optimize
         outputs = net(inputs)
-        accs.append(logit2acc(outputs, labels))  # probably a bad way to calculate accuracy
+        # accs.append(logit2acc(outputs, labels))  # probably a bad way to calculate accuracy
+        counter.add(outputs.data.cpu().numpy(), labels.data.cpu().numpy())
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
         training_loss += loss.cpu().data.numpy()[0]
 
-    train_acc = np.mean(accs)
-    accs = []
+    train_acc = counter.acc()
+    counter.flush()
     net.eval()
 
     for i, (inputs, labels) in enumerate(testloader):
         inputs, labels = Variable(inputs.cuda(async=True)), Variable(labels.cuda(async=True))
         outputs = net(inputs)
-        accs.append(logit2acc(outputs, labels))  # probably a bad way to calculate accuracy
+        # accs.append(logit2acc(outputs, labels))  # probably a bad way to calculate accuracy
+        counter.add(outputs.data.cpu().numpy(), labels.data.cpu().numpy())
 
 
     print(' -- Epoch %d time: %.4f loss: %.4f training acc: %.4f, validation accuracy: %.4f --' %
-          (epoch, time() - t0, training_loss, train_acc, np.mean(accs)))
+          (epoch, time() - t0, training_loss, train_acc, counter.acc()))
 
     save_checkpoint({
         'epoch': epoch + 1,
         'state_dict': net.state_dict(),
-        'test_accuracy': np.mean(accs),
+        'test_accuracy': counter.acc(),
         'optimizer': optimizer.state_dict(),
         'net': net.mdule if use_cuda else net,
-    }, prev_test_acc < np.mean(accs))
+    }, prev_test_acc < counter.acc())
 
     with open('{}/log'.format(args.log_dir), 'a') as f:
-        f.write('{},{},{},{}\n'.format(epoch, training_loss, train_acc, np.mean(accs)))
+        f.write('{},{},{},{}\n'.format(epoch, training_loss, train_acc, counter.acc()))
 
-    prev_test_acc = np.mean(accs)
+    prev_test_acc = counter.acc()
 
-print('Finished Training')
+print('Finish Training')
