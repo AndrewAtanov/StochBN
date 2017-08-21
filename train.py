@@ -159,7 +159,7 @@ for epoch in range(200):  # loop over the dataset multiple times
         'state_dict': net.state_dict(),
         'test_accuracy': counter.acc(),
         'optimizer': optimizer.state_dict(),
-        'net': net.mdule if use_cuda else net,
+        'net': net.module if use_cuda else net,
     }, prev_test_acc < counter.acc())
 
     with open('{}/log'.format(args.log_dir), 'a') as f:
