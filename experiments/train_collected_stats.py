@@ -1,6 +1,5 @@
 '''
-During training BN switch to test mode and use collected stats to normalize
-data.
+During training BN switch to test mode and use collected stats to normalize data.
 '''
 from __future__ import print_function
 
