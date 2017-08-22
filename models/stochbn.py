@@ -30,6 +30,7 @@ class _MyBatchNorm(nn.Module):
         self.n_samples = 0
         self.mean_strategy = 'vanilla'
         self.var_strategy = 'vanilla'
+        self.train_mode = 'vanilla'
 
         self._sum_m = 0
 
@@ -98,9 +99,20 @@ class _MyBatchNorm(nn.Module):
             return res
 
         if self.training:
-            return F.batch_norm(
-                input, self.running_mean, self.running_var, self.weight, self.bias,
-                self.training, self.momentum, self.eps)
+            if self.train_mode == 'vanilla':
+                return F.batch_norm(
+                    input, self.running_mean, self.running_var, self.weight,
+                    self.bias, self.training, self.momentum, self.eps)
+            elif self.train_mode == 'collected-stats':
+                F.batch_norm(
+                    input, self.running_mean, self.running_var, self.weight,
+                    self.bias, True, self.momentum, self.eps)
+
+                return F.batch_norm(
+                    input, self.running_mean, self.running_var, self.weight,
+                    self.bias, False, self.momentum, self.eps)
+
+
 
         self.cur_mean.copy_(self.running_mean)
 
