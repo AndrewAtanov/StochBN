@@ -31,6 +31,7 @@ class _MyBatchNorm(nn.Module):
         self.mean_strategy = 'vanilla'
         self.var_strategy = 'vanilla'
         self.train_mode = 'vanilla'
+        self.test_mode = 'standart'
 
         self._sum_m = 0
 
@@ -112,7 +113,16 @@ class _MyBatchNorm(nn.Module):
                     input, self.running_mean, self.running_var, self.weight,
                     self.bias, False, self.momentum, self.eps)
 
+        if 'sample-batch' in self.test_mode:
+            bs = int(self.test_mode.split('-')[-1])
+            chi2 = torch.randn(bs - 2, self.num_features).sum(dim=0).squeeze() * torch.sqrt(self.running_var) / (bs - 1)
+            norm = torch.normal(self.running_mean, torch.sqrt(self.running_var))
 
+            bs *= 1.
+            self.cur_mean.copy_(x[0] / bs + (bs - 1)/bs * norm)
+            self.cur_var.copy_((x[0] - self.cur_mean)**2 / (bs - 1) - chi2 + (x[0] / bs - norm / bs)**2 )
+            return F.batch_norm(input, self.cur_mean, self.cur_var, self.weight, self.bias,
+                                False, self.momentum, self.eps)
 
         self.cur_mean.copy_(self.running_mean)
 
