@@ -21,6 +21,10 @@ from time import time
 import importlib
 
 
+torch.cuda.random.manual_seed(42)
+np.random.seed(42)
+
+
 def class_for_name(module_name, class_name):
     # load the module, will raise ImportError if module cannot be loaded
     m = importlib.import_module(module_name)
