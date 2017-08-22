@@ -112,7 +112,7 @@ def lr_linear(epoch, k):
 prev_test_acc = 0
 counter = AccCounter()
 
-for epoch in range(200):  # loop over the dataset multiple times
+for epoch in range(args.epochs):  # loop over the dataset multiple times
     if (epoch + 1) == args.switch:
         set_StochBN_train_mode(net, 'collected-stats')
 
