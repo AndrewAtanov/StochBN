@@ -1,10 +1,13 @@
-'''Train CIFAR10 with PyTorch.'''
+'''
+During training BN switch to test mode and use collected stats to normalize
+data.
+'''
 from __future__ import print_function
 
 import torch
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
-from utils import AccCounter
+from utils import AccCounter, set_StochBN_train_mode
 
 import torchvision
 import torchvision.transforms as transforms
@@ -24,7 +27,6 @@ import importlib
 torch.cuda.random.manual_seed(42)
 np.random.seed(42)
 
-
 def class_for_name(module_name, class_name):
     # load the module, will raise ImportError if module cannot be loaded
     m = importlib.import_module(module_name)
@@ -34,11 +36,14 @@ def class_for_name(module_name, class_name):
 
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
-parser.add_argument('--lr', default=0.001, type=float, help='start learning rate')
+parser.add_argument('--lr', default=0.001, type=float,
+                    help='start learning rate')
 parser.add_argument('--epochs', default=200, type=int, help='number of epochs')
-parser.add_argument('--decrease_from', default=100, type=int, help='Epoch to decrease lr linear to 0 from')
+parser.add_argument('--decrease_from', default=100, type=int,
+                    help='Epoch to decrease from')
+parser.add_argument('--switch', default=100, type=int,
+                    help='Epoch to switch BN training mode')
 parser.add_argument('--log_dir', help='Directory for logging')
-parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
 parser.add_argument('--model', '-m', default='ResNet18', help='Model')
 args = parser.parse_args()
 
@@ -67,20 +72,8 @@ testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False,
 classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
 # Model
-if args.resume:
-    # Load checkpoint.
-    print('==> Resuming from checkpoint..')
-    assert os.path.isfile(args.resume), 'Error: no checkpoint directory found!'
-    checkpoint = torch.load('{}/best_model'.format(args.log_dir))
-    net = checkpoint['net']
-    best_acc = checkpoint['test_accuracy']
-    start_epoch = checkpoint['epoch']
-
-    # TODO: Add optimizer inintialization
-    raise NotImplementedError('Add optimizer initialization!!!')
-else:
-    print('==> Building model..')
-    net = class_for_name('models', args.model)()
+print('==> Building model..')
+net = class_for_name('models', args.model)()
 
 if use_cuda:
     net.cuda()
@@ -89,7 +82,6 @@ if use_cuda:
 
 criterion = nn.CrossEntropyLoss().cuda()
 optimizer = optim.Adam(net.parameters(), lr=0.001)
-
 
 with open('{}/log'.format(args.log_dir), 'w') as f:
     f.write('epoch,loss,train_acc,test_acc\n')
@@ -121,7 +113,10 @@ def lr_linear(epoch, k):
 prev_test_acc = 0
 counter = AccCounter()
 
-for epoch in range(args.epochs):
+for epoch in range(200):  # loop over the dataset multiple times
+    if (epoch + 1) == args.switch:
+        set_StochBN_train_mode(net, 'collected-stats')
+
     counter.flush()
 
     t0 = time()
