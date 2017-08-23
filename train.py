@@ -4,7 +4,7 @@ from __future__ import print_function
 import torch
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
-from utils import AccCounter
+from utils import AccCounter, class_for_name
 
 import torchvision
 import torchvision.transforms as transforms
@@ -23,14 +23,6 @@ import importlib
 
 torch.cuda.random.manual_seed(42)
 np.random.seed(42)
-
-
-def class_for_name(module_name, class_name):
-    # load the module, will raise ImportError if module cannot be loaded
-    m = importlib.import_module(module_name)
-    # get the class, will raise AttributeError if class cannot be found
-    c = getattr(m, class_name)
-    return c
 
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
