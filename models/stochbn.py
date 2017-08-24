@@ -114,13 +114,28 @@ class _MyBatchNorm(nn.Module):
                     self.bias, False, self.momentum, self.eps)
 
         if 'sample-batch' in self.test_mode:
-            bs = int(self.test_mode.split('-')[-1])
-            chi2 = torch.randn(bs - 2, self.num_features).sum(dim=0).squeeze() * torch.sqrt(self.running_var) / (bs - 1)
+            is_cuda = self.running_mean.is_cuda
+            dims = [-1] + [1] * (len(input.data[0].size()) - 1)
+            size = input.data[0].size()
+            bs = float(self.test_mode.split('-')[-1])
+            k = float(sum(input.data.size()[2:]))
+
+            x_mean = input.data[0].mean(1).mean(1)
+
+            chi2 = torch.randn(int((bs - 1) * k - 1), self.num_features).sum(dim=0).squeeze()
             norm = torch.normal(self.running_mean, torch.sqrt(self.running_var))
 
-            bs *= 1.
-            self.cur_mean.copy_(x[0] / bs + (bs - 1)/bs * norm)
-            self.cur_var.copy_((x[0] - self.cur_mean)**2 / (bs - 1) - chi2 + (x[0] / bs - norm / bs)**2 )
+            if is_cuda:
+                norm = norm.cuda()
+                chi2 = chi2.cuda()
+
+            chi2 *= torch.sqrt(self.running_var) / (bs - 1) / k
+
+            self.cur_mean.copy_(norm * (bs - 1) / bs + x_mean / bs)
+            tmp = ((input.data[0] - self.cur_mean.view(dims).expand(size)) ** 2).sum(dim=1).sum(dim=1) / (bs * k - 1)
+            tmp += ((bs - 1) * k - 1) / (bs * k - 1) / ((bs - 1) * k) * chi2
+            tmp += ((x_mean - norm) ** 2) * (bs - 1) * k / bs / (bs * k - 1)
+            self.cur_var.copy_(tmp)
             return F.batch_norm(input, self.cur_mean, self.cur_var, self.weight, self.bias,
                                 False, self.momentum, self.eps)
 
@@ -156,6 +171,9 @@ class _MyBatchNorm(nn.Module):
 
 
 class MyBatchNorm1d(_MyBatchNorm):
+    def __init__(self, *args, **kwargs):
+        raise NotImplemented('')
+
     def _check_input_dim(self, input):
         if input.dim() != 2 and input.dim() != 3:
             raise ValueError('expected 2D or 3D input (got {}D input)'
@@ -172,6 +190,9 @@ class MyBatchNorm2d(_MyBatchNorm):
 
 
 class MyBatchNorm3d(_MyBatchNorm):
+    def __init__(self, *args, **kwargs):
+        raise NotImplemented('')
+
     def _check_input_dim(self, input):
         if input.dim() != 5:
             raise ValueError('expected 5D input (got {}D input)'
