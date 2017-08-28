@@ -3,6 +3,10 @@ from models.stochbn import _MyBatchNorm
 import tempfile
 import itertools as IT
 import os
+from torch.nn.parallel import DataParallel
+import torch
+from models import *
+import importlib
 
 
 def uniquify(path, sep = ''):
@@ -11,7 +15,7 @@ def uniquify(path, sep = ''):
         yield ''
         while True:
             yield '{s}{n:d}'.format(s = sep, n = next(count))
-    orig = tempfile._name_sequence 
+    orig = tempfile._name_sequence
     with tempfile._once_lock:
         tempfile._name_sequence = name_sequence()
         path = os.path.normpath(path)
@@ -44,6 +48,7 @@ def set_collect(net, mode=True):
         if isinstance(m, _MyBatchNorm):
             m.collect = mode
 
+
 def set_MyBN_strategy(net, mean_strategy='vanilla', var_strategy='vanilla'):
     for m in net.modules():
         if isinstance(m, _MyBatchNorm):
@@ -69,3 +74,18 @@ def set_StochBN_test_mode(net, mode):
     for m in net.modules():
         if isinstance(m, _MyBatchNorm):
             m.test_mode = mode
+
+
+def load_model(filename, print_info=False):
+    use_cuda = torch.cuda.is_available()
+    chekpoint = torch.load(filename)
+    net = class_for_name('models', chekpoint['name'])()
+    if use_cuda:
+        net = DataParallel(net, device_ids=range(torch.cuda.device_count()))
+
+    net.load_state_dict(chekpoint['state_dict'])
+
+    if print_info:
+        print('Net validation accuracy = {}'.format(chekpoint['test_accuracy']))
+
+    return net

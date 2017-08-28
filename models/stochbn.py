@@ -32,6 +32,7 @@ class _MyBatchNorm(nn.Module):
         self.var_strategy = 'vanilla'
         self.train_mode = 'vanilla'
         self.test_mode = 'standart'
+        self.s = None
 
         self._sum_m = 0
 
@@ -76,6 +77,7 @@ class _MyBatchNorm(nn.Module):
             self.mean_var /= (self.n_samples - 1)
 
             s = torch.log(self.sum_var / self.n_samples) - self.sum_logvar / self.n_samples
+            self.s = s.cpu().numpy()
             self.var_shape.copy_((3 - s + torch.sqrt((s - 3) ** 2 + 24 * s)) / 12. / s)
             self.var_scale.copy_(self.sum_var / self.var_shape / self.n_samples)
 
@@ -141,9 +143,8 @@ class _MyBatchNorm(nn.Module):
 
         self.cur_mean.copy_(self.running_mean)
 
+
         if self.mean_strategy == 'random':
-            #             print 'Alloha!'
-            #             print torch.normal(self.mean_mean, torch.sqrt(self.mean_var))
             self.cur_mean.copy_(torch.normal(self.mean_mean, torch.sqrt(self.mean_var)))
         elif self.mean_strategy == 'collected':
             self.cur_mean.copy_(self.mean_mean)
@@ -151,8 +152,17 @@ class _MyBatchNorm(nn.Module):
         self.cur_var.copy_(self.running_var)
 
         if self.var_strategy == 'random':
-            self.cur_var.copy_(torch.Tensor(np.random.gamma(self.var_shape.tolist(),
-                                                            self.var_scale.tolist())).cuda())
+            cond = np.isnan(self.s) | (self.s < 1e-8)
+            shape = self.var_shape.cpu().numpy()
+            scale = self.var_scale.cpu().numpy()
+
+            shape[cond] = 1
+            scale[cond] = 1
+
+            val = np.random.gamma(shape, scale)
+
+            val[cond] = (self.sum_var / (self.n_samples * 1.)).cpu().numpy()[cond]
+            self.cur_var.copy_(torch.Tensor(val))
         elif self.var_strategy == 'collected':
             self.cur_var.copy_(self.sum_var / (self.n_samples * 1.))
 
