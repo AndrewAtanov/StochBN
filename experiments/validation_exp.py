@@ -89,11 +89,13 @@ cell_len = max(8, max(map(len, args.strategies)))
 
 print('==> Start experiment')
 
+with open(log_fn, 'w') as f:
+    f.write('mean,var,acc\n')
+
+
 for ms, vs in product(args.strategies, repeat=2):
     net.eval()
     set_MyBN_strategy(net, mean_strategy=ms, var_strategy=vs)
-    with open(log_fn, 'w') as f:
-        f.write('mean,var,acc\n')
 
     rs = (ms == 'random') or (vs == 'random')
     if rs:
