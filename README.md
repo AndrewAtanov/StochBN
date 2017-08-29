@@ -70,7 +70,6 @@ Experiments and StochBN implementation for pytorch.
     </table>
     <br>
 	* __ResNet50__
-
       <table>
         <tr>
           <th>mean \ variance</th>
