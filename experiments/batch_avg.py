@@ -8,6 +8,7 @@ import torchvision
 import torchvision.transforms as transforms
 from torch.nn.parallel import DataParallel
 
+from itertools import product
 import os
 import argparse
 
@@ -20,7 +21,7 @@ from torch.autograd import Variable
 import shutil
 from time import time
 import importlib
-from utils import AccCounter, uniquify
+from utils import AccCounter, uniquify, load_model
 from time import time
 
 
@@ -33,24 +34,15 @@ parser.add_argument('--model', '-m', help='Trained model')
 parser.add_argument('--n_inferences', '-n', type=int, nargs='+', help='List of number of batches for one object')
 parser.add_argument('--data', '-d', default='test', help='Either \'train\' or \'test\' -- data to fill batch')
 parser.add_argument('--log_dir', help='Directory for logging')
-parser.add_argument('--bs', type=int, default=200, help='Batch size')
+parser.add_argument('--bs', type=int, nargs='+', default=[200], help='Batch size')
 
 args = parser.parse_args()
 
 use_cuda = torch.cuda.is_available()
 
 print('==> Read model ...')
-chekpoint = torch.load(args.model)
 
-print('-------------- WARNNIG!!! ResNet34 ONLY! -----------------')
-net = ResNet34() #chekpoint['net']
-
-if use_cuda:
-    net = DataParallel(net, device_ids=range(torch.cuda.device_count()))
-
-net.load_state_dict(chekpoint['state_dict'])
-
-print('Model test accuracy: {:.4f}'.format(chekpoint['test_accuracy']))
+net = load_model(args.model, print_info=True)
 
 print('==> Preparing data ...')
 
@@ -65,22 +57,20 @@ if args.data == 'train':
     train_data = trainset.train_data.astype(float).transpose((0, 3, 1, 2))
     train_labels = trainset.train_labels
 
-BS = args.bs
-
 
 filename = uniquify('{}/batch_avg_{}_logs'.format(args.log_dir, args.data))
 
 with open(filename, 'w') as f:
-    f.write('n_infer,acc\n')
+    f.write('n_infer,batch_size,acc\n')
 
 print('==> Start experiment')
 
 net.train()
 
-for n_infer in args.n_inferences:
+for n_infer, BS in product(args.n_inferences, args.bs):
     start_time = time()
     logits = np.zeros([test_data.shape[0], 10])
-    
+
     if args.data == 'test':
         for _ in range(n_infer):
             perm = np.random.permutation(np.arange(test_data.shape[0]))
@@ -105,7 +95,7 @@ for n_infer in args.n_inferences:
     counter.add(logits, test_labels)
     acc = counter.acc()
 
-    print('{} inferences -- accuracy {}; time {:.3f} sec'.format(n_infer, acc, time() - start_time))
+    print('{} inferences, batch size {} -- accuracy {}; time {:.3f} sec'.format(n_infer, BS, acc, time() - start_time))
 
     with open(filename, 'a') as f:
-        f.write('{},{}'.format(n_infer, acc))
+        f.write('{},{},{}\n'.format(n_infer, BS, acc))
