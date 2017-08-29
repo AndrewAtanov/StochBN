@@ -50,21 +50,21 @@ Experiments and StochBN implementation for pytorch.
   </tr>
   <tr>
     <td>vanilla</td>
-    <td>0.9367</td>
-    <td>0.9367</td>
-    <td>0.9376</td>
+    <td>0.9406</td>
+    <td>0.9406</td>
+    <td>0.9404</td>
   </tr>
   <tr>
     <td>mean</td>
-    <td>0.9367</td>
-    <td>0.9367</td>
-    <td>0.9376</td>
+    <td>0.9406</td>
+    <td>0.9406</td>
+    <td>0.9409</td>
   </tr>
   <tr>
     <td>random</td>
-    <td>0.9374</td>
-    <td>0.9377</td>
-    <td>0.9378</td>
+    <td>0.9407</td>
+    <td>0.9406</td>
+    <td>0.9406</td>
   </tr>
 </table>
 
