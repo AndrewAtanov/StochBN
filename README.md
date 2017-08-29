@@ -10,63 +10,96 @@ Experiments and StochBN implementation for pytorch.
 
 # Results
 
-* Test accuracy for ResNet18 on CIFAR10 with different BN strategies (100 tries for random)
+1. Test accuracy on CIFAR10 dataset with different BN strategies (100 tries for random):
 
-<table>
-  <tr>
-    <th>mean \ variance</th>
-    <th>vanilla</th>
-    <th>mean</th>
-    <th>random</th>
-  </tr>
-  <tr>
-    <td>vanilla</td>
-    <td>0.9367</td>
-    <td>0.9367</td>
-    <td>0.9376</td>
-  </tr>
-  <tr>
-    <td>mean</td>
-    <td>0.9367</td>
-    <td>0.9367</td>
-    <td>0.9376</td>
-  </tr>
-  <tr>
-    <td>random</td>
-    <td>0.9374</td>
-    <td>0.9377</td>
-    <td>0.9378</td>
-  </tr>
-</table>
+	* __ResNet18__
+    <table>
+      <tr>
+        <th>mean \ variance</th>
+        <th>vanilla</th>
+        <th>mean</th>
+        <th>random</th>
+      </tr>
+      <tr>
+        <td>vanilla</td>
+        <td>0.9367</td>
+        <td>0.9367</td>
+        <td>0.9376</td>
+      </tr>
+      <tr>
+        <td>mean</td>
+        <td>0.9367</td>
+        <td>0.9367</td>
+        <td>0.9376</td>
+      </tr>
+      <tr>
+        <td>random</td>
+        <td>0.9374</td>
+        <td>0.9377</td>
+        <td>0.9378</td>
+      </tr>
+    </table>
+    <br>
 
-* Test accuracy for ResNet34 on CIFAR10 with different BN strategies (100 tries for random)
+	* __ResNet34__
+    <table>
+      <tr>
+        <th>mean \ variance</th>
+        <th>vanilla</th>
+        <th>mean</th>
+        <th>random</th>
+      </tr>
+      <tr>
+        <td>vanilla</td>
+        <td>0.9406</td>
+        <td>0.9406</td>
+        <td>0.9404</td>
+      </tr>
+      <tr>
+        <td>mean</td>
+        <td>0.9406</td>
+        <td>0.9406</td>
+        <td>0.9409</td>
+      </tr>
+      <tr>
+        <td>random</td>
+        <td>0.9407</td>
+        <td>0.9406</td>
+        <td>0.9406</td>
+      </tr>
+    </table>
+    <br>
+	* __ResNet50__
 
-<table>
-  <tr>
-    <th>mean \ variance</th>
-    <th>vanilla</th>
-    <th>mean</th>
-    <th>random</th>
-  </tr>
-  <tr>
-    <td>vanilla</td>
-    <td>0.9406</td>
-    <td>0.9406</td>
-    <td>0.9404</td>
-  </tr>
-  <tr>
-    <td>mean</td>
-    <td>0.9406</td>
-    <td>0.9406</td>
-    <td>0.9409</td>
-  </tr>
-  <tr>
-    <td>random</td>
-    <td>0.9407</td>
-    <td>0.9406</td>
-    <td>0.9406</td>
-  </tr>
-</table>
+      <table>
+        <tr>
+          <th>mean \ variance</th>
+          <th>vanilla</th>
+          <th>mean</th>
+          <th>random</th>
+        </tr>
+        <tr>
+          <td>vanilla</td>
+          <td>0.94</td>
+          <td>0.94</td>
+          <td>0.9399</td>
+        </tr>
+        <tr>
+          <td>mean</td>
+          <td>0.94</td>
+          <td>0.94</td>
+          <td>0.94</td>
+        </tr>
+        <tr>
+          <td>random</td>
+          <td>0.9399</td>
+          <td>0.94</td>
+          <td>0.9399</td>
+        </tr>
+      </table>
+      <br>
+
+
 
 # Acknowledgement
 * Thanks https://github.com/kuangliu for models https://github.com/kuangliu/pytorch-cifar
