@@ -10,7 +10,7 @@ Experiments and StochBN implementation for pytorch.
 
 # Results
 
-* Test accuracy for ResNet18 on CIFAR10 with different BN strategy
+* Test accuracy for ResNet18 on CIFAR10 with different BN strategies (100 tries for random)
 
 <table>
   <tr>
@@ -39,7 +39,7 @@ Experiments and StochBN implementation for pytorch.
   </tr>
 </table>
 
-* Test accuracy for ResNet34 on CIFAR10 with different BN strategy
+* Test accuracy for ResNet34 on CIFAR10 with different BN strategies (100 tries for random)
 
 <table>
   <tr>
