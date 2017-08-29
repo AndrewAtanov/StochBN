@@ -10,7 +10,7 @@ Experiments and StochBN implementation for pytorch.
 
 # Results
 
-1. Test accuracy on CIFAR10 dataset with different BN strategies (100 tries for random):
+1. Test accuracy on CIFAR10 dataset with different BN strategies (100 tries for random) `validation_exp.py`:
 
 	* __ResNet18__
     <table>
@@ -98,8 +98,11 @@ Experiments and StochBN implementation for pytorch.
       </tr>
     </table>
     <br>
+2. Switch Batch Normalization layers to train mode (use batch statistic instead of exponential smoothed) on inference stage and average prediction for object throw many batches (marginalize batch stochasticity).
 
-
+![ResNet18](results/resnet18/batch_avg_test_plot.png)
+![ResNet34](results/resnet34/batch_avg_test_plot.png)
+![ResNet50](results/resnet50/batch_avg_test_plot.png)
 
 # Acknowledgement
 * Thanks https://github.com/kuangliu for models https://github.com/kuangliu/pytorch-cifar
