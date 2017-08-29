@@ -69,34 +69,35 @@ Experiments and StochBN implementation for pytorch.
       </tr>
     </table>
     <br>
+
 	* __ResNet50__
-      <table>
-        <tr>
-          <th>mean \ variance</th>
-          <th>vanilla</th>
-          <th>mean</th>
-          <th>random</th>
-        </tr>
-        <tr>
-          <td>vanilla</td>
-          <td>0.94</td>
-          <td>0.94</td>
-          <td>0.9399</td>
-        </tr>
-        <tr>
-          <td>mean</td>
-          <td>0.94</td>
-          <td>0.94</td>
-          <td>0.94</td>
-        </tr>
-        <tr>
-          <td>random</td>
-          <td>0.9399</td>
-          <td>0.94</td>
-          <td>0.9399</td>
-        </tr>
-      </table>
-      <br>
+    <table>
+      <tr>
+        <th>mean \ variance</th>
+        <th>vanilla</th>
+        <th>mean</th>
+        <th>random</th>
+      </tr>
+      <tr>
+        <td>vanilla</td>
+        <td>0.94</td>
+        <td>0.94</td>
+        <td>0.9399</td>
+      </tr>
+      <tr>
+        <td>mean</td>
+        <td>0.94</td>
+        <td>0.94</td>
+        <td>0.94</td>
+      </tr>
+      <tr>
+        <td>random</td>
+        <td>0.9399</td>
+        <td>0.94</td>
+        <td>0.9399</td>
+      </tr>
+    </table>
+    <br>
 
 
 
