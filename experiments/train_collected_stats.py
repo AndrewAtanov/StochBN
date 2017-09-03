@@ -42,10 +42,14 @@ parser.add_argument('--lr', default=0.001, type=float,
 parser.add_argument('--epochs', default=200, type=int, help='number of epochs')
 parser.add_argument('--decrease_from', default=100, type=int,
                     help='Epoch to decrease from')
+parser.add_argument('--decay', default=None, type=float,
+                    help='Decay rate')
 parser.add_argument('--switch', default=100, type=int,
                     help='Epoch to switch BN training mode')
 parser.add_argument('--log_dir', help='Directory for logging')
 parser.add_argument('--model', '-m', default='ResNet18', help='Model')
+parser.add_argument('--resume', '-r', action='store_true',
+                    help='Fine-tune model')
 args = parser.parse_args()
 
 use_cuda = torch.cuda.is_available()
@@ -74,15 +78,30 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship'
 
 # Model
 print('==> Building model..')
-net = class_for_name('models', args.model)()
+# net = class_for_name('models', args.model)()
+
+if args.resume:
+    # Load checkpoint.
+    print('==> Resuming from checkpoint..')
+    assert os.path.isfile(args.model), 'Error: no checkpoint directory found!'
+    checkpoint = torch.load('{}'.format(args.model))
+    net = class_for_name('models', checkpoint['name'])()
+    best_acc = checkpoint['test_accuracy']
+else:
+    print('==> Building model..')
+    net = class_for_name('models', args.model)()
+
 
 if use_cuda:
     net.cuda()
     net = torch.nn.DataParallel(net, device_ids=range(torch.cuda.device_count()))
-    cudnn.benchmark = True
 
 criterion = nn.CrossEntropyLoss().cuda()
-optimizer = optim.Adam(net.parameters(), lr=0.001)
+optimizer = optim.Adam(net.parameters(), lr=args.lr)
+
+if args.resume:
+    net.load_state_dict(checkpoint['state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
 
 with open('{}/log'.format(args.log_dir), 'w') as f:
     f.write('epoch,loss,train_acc,test_acc\n')
@@ -107,8 +126,12 @@ def adjust_learning_rate(optimizer, lr):
         param_group['lr'] = lr
 
 
-def lr_linear(epoch, k):
-    return max(0, (k * np.minimum(2. - 1.0 * epoch / 100., 1.)))
+def lr_linear(epoch):
+    return max(0, (args.lr * np.minimum((args.decrease_from - epoch) * 1. / (args.epochs - args.decrease_from) + 1, 1.)))
+
+
+def lr_exponential(epoch):
+    return args.lr * (args.decay ** np.maximum(0, epoch - args.decrease_from))
 
 
 prev_test_acc = 0
@@ -121,7 +144,8 @@ for epoch in range(args.epochs):  # loop over the dataset multiple times
     counter.flush()
 
     t0 = time()
-    adjust_learning_rate(optimizer, lr_linear(epoch, 1e-3))
+    lr = lr_exponential(epoch) if args.decay else lr_linear(epoch)
+    adjust_learning_rate(optimizer, lr)
     net.train()
     training_loss = 0
     # accs = []
@@ -152,8 +176,8 @@ for epoch in range(args.epochs):  # loop over the dataset multiple times
         counter.add(outputs.data.cpu().numpy(), labels.data.cpu().numpy())
 
 
-    print(' -- Epoch %d time: %.4f loss: %.4f training acc: %.4f, validation accuracy: %.4f --' %
-          (epoch, time() - t0, training_loss, train_acc, counter.acc()))
+    print(' -- Epoch %d time: %.4f loss: %.4f training acc: %.4f, validation accuracy: %.4f ; lr %.6f --' %
+          (epoch, time() - t0, training_loss, train_acc, counter.acc(), lr))
 
     save_checkpoint({
         'epoch': epoch + 1,
