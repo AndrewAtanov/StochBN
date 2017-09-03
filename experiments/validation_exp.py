@@ -52,6 +52,7 @@ parser.add_argument('--strategies', '-s', default=['vanilla', 'mean', 'random'],
                     nargs='+', type=str, help='Strategies for BN layer.')
 parser.add_argument('--tries', '-t', nargs='+', type=int,
                     help='Number of tries for random strategy')
+parser.add_argument('--train_passes', default=1, type=int)
 args = parser.parse_args()
 
 print('==> Load model...')
@@ -80,7 +81,8 @@ trainloader = torch.utils.data.DataLoader(trainset, batch_size=128,
 net.train()
 set_collect(net)
 print('Train acc', cifar_accuracy(net, 'train'))
-
+for _ in range(args.train_passes - 1):
+    cifar_accuracy(net, 'train')
 
 set_collect(net, mode=False)
 
@@ -90,6 +92,7 @@ cell_len = max(8, max(map(len, args.strategies)))
 print('==> Start experiment')
 
 with open(log_fn, 'w') as f:
+    f.write('# {} passes throw training data\n'.format(args.train_passes))
     f.write('mean,var,acc\n')
 
 
