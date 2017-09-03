@@ -115,31 +115,51 @@ class _MyBatchNorm(nn.Module):
                     input, self.running_mean, self.running_var, self.weight,
                     self.bias, False, self.momentum, self.eps)
 
-        if 'sample-batch' in self.test_mode:
+        if 'sample' in self.test_mode:
+            if input.data.size()[0] > 1:
+                return F.batch_norm(input, self.cur_mean, self.cur_var,
+                                    self.weight, self.bias,
+                                    True, self.momentum, self.eps)
+
             is_cuda = self.running_mean.is_cuda
             dims = [-1] + [1] * (len(input.data[0].size()) - 1)
-            size = input.data[0].size()
-            bs = float(self.test_mode.split('-')[-1])
-            k = float(sum(input.data.size()[2:]))
+            # size = input.data[0].size()
+            bs = int(self.test_mode.split('-')[-1])
+            _pass = self.test_mode.split('-')[1] == 'pass'
 
-            x_mean = input.data[0].mean(1).mean(1)
+            h, w = input.data.size()[2:]
 
-            chi2 = torch.randn(int((bs - 1) * k - 1), self.num_features).sum(dim=0).squeeze()
-            norm = torch.normal(self.running_mean, torch.sqrt(self.running_var))
+            batch = torch.normal(self.running_mean.view(1, -1, 1, 1).expand(bs - 1, self.num_features, h, w),
+                                 torch.sqrt(self.running_var.view(1, -1, 1, 1).expand(bs - 1, self.num_features, h, w)))
 
             if is_cuda:
-                norm = norm.cuda()
-                chi2 = chi2.cuda()
+                batch = batch.cuda()
 
-            chi2 *= torch.sqrt(self.running_var) / (bs - 1) / k
+            res = F.batch_norm(torch.cat([input, batch]),
+                                self.cur_mean, self.cur_var,
+                                self.weight, self.bias,
+                                True, self.momentum, self.eps)
 
-            self.cur_mean.copy_(norm * (bs - 1) / bs + x_mean / bs)
-            tmp = ((input.data[0] - self.cur_mean.view(dims).expand(size)) ** 2).sum(dim=1).sum(dim=1) / (bs * k - 1)
-            tmp += ((bs - 1) * k - 1) / (bs * k - 1) / ((bs - 1) * k) * chi2
-            tmp += ((x_mean - norm) ** 2) * (bs - 1) * k / bs / (bs * k - 1)
-            self.cur_var.copy_(tmp)
-            return F.batch_norm(input, self.cur_mean, self.cur_var, self.weight, self.bias,
-                                False, self.momentum, self.eps)
+            return res if _pass else res[:1]
+
+            # k = float(sum(input.data.size()[2:]))
+            #
+            # x_mean = input.data[0].mean(1).mean(1)
+            #
+            # chi2 = torch.randn(int((bs - 1) * k - 1), self.num_features).sum(dim=0).squeeze()
+            # norm = torch.normal(self.running_mean, torch.sqrt(self.running_var))
+            #
+            # if is_cuda:
+            #     norm = norm.cuda()
+            #     chi2 = chi2.cuda()
+            #
+            # chi2 *= torch.sqrt(self.running_var) / (bs - 1) / k
+            #
+            # self.cur_mean.copy_(norm * (bs - 1) / bs + x_mean / bs)
+            # tmp = ((input.data[0] - self.cur_mean.view(dims).expand(size)) ** 2).sum(dim=1).sum(dim=1) / (bs * k - 1)
+            # tmp += ((bs - 1) * k - 1) / (bs * k - 1) / ((bs - 1) * k) * chi2
+            # tmp += ((x_mean - norm) ** 2) * (bs - 1) * k / bs / (bs * k - 1)
+            # self.cur_var.copy_(tmp)
 
         self.cur_mean.copy_(self.running_mean)
 
