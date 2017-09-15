@@ -52,7 +52,8 @@ parser.add_argument('--strategies', '-s', default=['vanilla', 'mean', 'random'],
                     nargs='+', type=str, help='Strategies for BN layer.')
 parser.add_argument('--tries', '-t', nargs='+', type=int,
                     help='Number of tries for random strategy')
-parser.add_argument('--train_passes', default=1, type=int)
+parser.add_argument('--train_passes', default=[1], nargs='+', type=int)
+parser.add_argument('--train_augnentation', action='store_true')
 args = parser.parse_args()
 
 print('==> Load model...')
@@ -74,45 +75,57 @@ transform_train = transforms.Compose([
 ])
 trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
                                         download=True,
-                                        transform=transform_train)
+                                        transform=transform_train if args.train_augnentation else transform_test)
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=128,
                                           shuffle=True, num_workers=2)
 
-net.train()
-set_collect(net)
-print('Train acc', cifar_accuracy(net, 'train'))
-for _ in range(args.train_passes - 1):
-    cifar_accuracy(net, 'train')
 
-set_collect(net, mode=False)
+net.eval()
+print('Vanilla train accuracy', cifar_accuracy(net, 'train'))
+
+net.train()
+# set_collect(net)
+# print('Train acc', cifar_accuracy(net, 'train'))
+# for _ in range(args.train_passes - 1):
+#     cifar_accuracy(net, 'train')
+#
+# set_collect(net, mode=False)
 
 log_fn = uniquify('{}/validation_exp'.format(args.log_dir))
-cell_len = max(8, max(map(len, args.strategies)))
 
 print('==> Start experiment')
 
 with open(log_fn, 'w') as f:
-    f.write('# {} passes throw training data\n'.format(args.train_passes))
-    f.write('mean,var,acc\n')
+    f.write('# Train augmentation - {}\n'.format(args.train_augnentation))
+    f.write('mean,var,tries,data_passes,acc\n')
 
+passes_done = 0
+for n_passes in args.train_passes:
+    print('--   ', n_passes, '   --')
+    set_collect(net)
+    while passes_done < n_passes:
+        cifar_accuracy(net, 'train')
+        passes_done += 1
+    set_collect(net, mode=False)
 
-for ms, vs in product(args.strategies, repeat=2):
-    net.eval()
-    set_MyBN_strategy(net, mean_strategy=ms, var_strategy=vs)
+    for ms, vs in product(args.strategies, repeat=2):
+        net.eval()
+        set_MyBN_strategy(net, mean_strategy=ms, var_strategy=vs)
 
-    rs = (ms == 'random') or (vs == 'random')
-    if rs:
-        results = []
-        for t in args.tries:
-            results.append(cifar_accuracy(net, random_strategy=rs, tries=t))
+        rs = (ms == 'random') or (vs == 'random')
+        if rs:
+            results = []
+            for t in args.tries:
+                results.append(cifar_accuracy(net, random_strategy=rs, tries=t))
+                with open(log_fn.format(ms, vs), 'a') as f:
+                    f.write('{},{},{},{},{}\n'.format(ms, vs, t, n_passes,
+                                                      results[-1]))
+                print('Mean strategy -- {}, var strategy -- {}, '
+                      'acc {} ({} tries)'.format(ms, vs, results[-1], t))
+
+        else:
+            acc = cifar_accuracy(net)
             with open(log_fn.format(ms, vs), 'a') as f:
-                f.write('{},{},{}\n'.format(ms, vs, results[-1]))
+                f.write('{},{},1,{},{}\n'.format(ms, vs, n_passes, acc))
             print('Mean strategy -- {}, var strategy -- {}, '
-                  'acc {} ({} tries)'.format(ms, vs, results[-1], t))
-
-    else:
-        acc = cifar_accuracy(net)
-        with open(log_fn.format(ms, vs), 'a') as f:
-            f.write('{},{},{}\n'.format(ms, vs, acc))
-        print('Mean strategy -- {}, var strategy -- {}, '
-              'acc {}'.format(ms, vs, acc))
+                  'acc {}'.format(ms, vs, acc))
