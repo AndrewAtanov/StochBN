@@ -33,6 +33,7 @@ parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--model', '-m', help='Trained model')
 parser.add_argument('--n_inferences', '-n', type=int, nargs='+', help='List of number of batches for one object')
 parser.add_argument('--data', '-d', default='test', help='Either \'train\' or \'test\' -- data to fill batch')
+parser.add_argument('--acc', default='test', help='Either \'train\' or \'test\' -- to calculate accuracy')
 parser.add_argument('--log_dir', help='Directory for logging')
 parser.add_argument('--bs', type=int, nargs='+', default=[200], help='Batch size')
 
@@ -51,14 +52,16 @@ testset = torchvision.datasets.CIFAR10(root='./data', train=False,
 test_data = testset.test_data.astype(float).transpose((0, 3, 1, 2))
 test_labels = np.array(testset.test_labels)
 
-if args.data == 'train':
-    trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
-                                            download=True)
-    train_data = trainset.train_data.astype(float).transpose((0, 3, 1, 2))
-    train_labels = trainset.train_labels
+
+trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
+                                        download=True)
+train_data = trainset.train_data.astype(float).transpose((0, 3, 1, 2))
+train_labels = trainset.train_labels
 
 
-filename = uniquify('{}/batch_avg_{}_logs'.format(args.log_dir, args.data))
+filename = uniquify('{}/batch_avg_{}_logs_{}_acc'.format(args.log_dir,
+                                                         args.data,
+                                                         args.acc))
 
 with open(filename, 'w') as f:
     f.write('n_infer,batch_size,acc\n')
@@ -67,16 +70,19 @@ print('==> Start experiment')
 
 net.train()
 
+acc_data = test_data if args.acc == 'test' else train_data
+acc_labels = test_labels if args.acc == 'test' else train_labels
+
 for n_infer, BS in product(args.n_inferences, args.bs):
     start_time = time()
-    logits = np.zeros([test_data.shape[0], 10])
+    logits = np.zeros([acc_data.shape[0], 10])
 
-    if args.data == 'test':
+    if args.data == 'test' or args.acc == 'train':
         for _ in range(n_infer):
-            perm = np.random.permutation(np.arange(test_data.shape[0]))
+            perm = np.random.permutation(np.arange(acc_data.shape[0]))
             for i in range(0, len(perm), BS):
                 idxs = perm[i: i + BS]
-                inputs = Variable(torch.Tensor(test_data[idxs] / 255.).cuda(async=True))
+                inputs = Variable(torch.Tensor(acc_data[idxs] / 255.).cuda(async=True))
                 outputs = net(inputs)
 
                 logits[idxs] += outputs.cpu().data.numpy()
@@ -92,7 +98,7 @@ for n_infer, BS in product(args.n_inferences, args.bs):
 
 
     counter = AccCounter()
-    counter.add(logits, test_labels)
+    counter.add(logits, acc_labels)
     acc = counter.acc()
 
     print('{} inferences, batch size {} -- accuracy {}; time {:.3f} sec'.format(n_infer, BS, acc, time() - start_time))
