@@ -33,6 +33,7 @@ class _MyBatchNorm(nn.Module):
         self.train_mode = 'vanilla'
         self.test_mode = 'standart'
         self.s = None
+        self.sample_impl = 'straightforward'
 
         self._sum_m = 0
 
@@ -116,31 +117,71 @@ class _MyBatchNorm(nn.Module):
                     self.bias, False, self.momentum, self.eps)
 
         if 'sample' in self.test_mode:
-            if input.data.size()[0] > 1:
-                return F.batch_norm(input, self.cur_mean, self.cur_var,
-                                    self.weight, self.bias,
-                                    True, self.momentum, self.eps)
-
             is_cuda = self.running_mean.is_cuda
-            dims = [-1] + [1] * (len(input.data[0].size()) - 1)
-            # size = input.data[0].size()
-            bs = int(self.test_mode.split('-')[-1])
-            _pass = self.test_mode.split('-')[1] == 'pass'
-
+            bs = float(self.test_mode.split('-')[-1])
+            n = bs - 1
             h, w = input.data.size()[2:]
+            k = h * w * 1.
 
-            batch = torch.normal(self.running_mean.view(1, -1, 1, 1).expand(bs - 1, self.num_features, h, w),
-                                 torch.sqrt(self.running_var.view(1, -1, 1, 1).expand(bs - 1, self.num_features, h, w)))
+            # TODO: impliment for different dimensions
+            data_mean = input.mean(dim=2).mean(dim=2).data
+
+            sampled_mean = torch.randn(data_mean.size()[:2])
+            chi2 = torch.FloatTensor(np.random.chisquare(int(n * k) - 1,
+                                                         size=input.size()[:2]))
+            if is_cuda:
+                chi2 = chi2.cuda()
+                sampled_mean = sampled_mean.cuda()
+
+            sampled_mean *= torch.sqrt(self.running_var / n / k).view(1, -1).expand_as(sampled_mean)
+            sampled_mean += self.running_mean.view(1, -1).expand_as(sampled_mean)
+
+            mean = data_mean / bs + (bs - 1) / bs * sampled_mean
+            var = torch.sum((input.data - mean.view(-1, self.num_features, 1, 1).expand_as(input.data)) ** 2, dim=2).sum(2)
+            var = var / (bs * k - 1) + (n * k - 1) / (bs * k - 1) / (n * k) * self.running_var * chi2
+            var += n * k / (bs * (bs * k - 1)) * (data_mean - sampled_mean) ** 2
 
             if is_cuda:
-                batch = batch.cuda()
+                mean = mean.cuda()
+                var = var.cuda()
 
-            res = F.batch_norm(torch.cat([input, batch]),
-                                self.cur_mean, self.cur_var,
+            self.cur_mean.copy_(torch.zeros(self.cur_mean.size()))
+            self.cur_var.copy_(torch.ones(self.cur_var.size()))
+
+            input.data -= mean.view(-1, self.num_features, 1, 1).expand_as(input)
+            input.data /= torch.sqrt(var.view(-1, self.num_features, 1, 1).expand_as(input))
+
+            return F.batch_norm(input, self.cur_mean, self.cur_var,
                                 self.weight, self.bias,
                                 True, self.momentum, self.eps)
 
-            return res if _pass else res[:1]
+            #
+            #
+            # if input.data.size()[0] > 1:
+            #     return F.batch_norm(input, self.cur_mean, self.cur_var,
+            #                         self.weight, self.bias,
+            #                         True, self.momentum, self.eps)
+            #
+            # is_cuda = self.running_mean.is_cuda
+            # dims = [-1] + [1] * (len(input.data[0].size()) - 1)
+            # # size = input.data[0].size()
+            # bs = int(self.test_mode.split('-')[-1])
+            # _pass = self.test_mode.split('-')[1] == 'pass'
+            #
+            # h, w = input.data.size()[2:]
+            #
+            # batch = torch.normal(self.running_mean.view(1, -1, 1, 1).expand(bs - 1, self.num_features, h, w),
+            #                      torch.sqrt(self.running_var.view(1, -1, 1, 1).expand(bs - 1, self.num_features, h, w)))
+            #
+            # if is_cuda:
+            #     batch = batch.cuda()
+            #
+            # res = F.batch_norm(torch.cat([input, batch]),
+            #                     self.cur_mean, self.cur_var,
+            #                     self.weight, self.bias,
+            #                     True, self.momentum, self.eps)
+            #
+            # return res if _pass else res[:1]
 
             # k = float(sum(input.data.size()[2:]))
             #
