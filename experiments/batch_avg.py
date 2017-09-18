@@ -21,7 +21,7 @@ from torch.autograd import Variable
 import shutil
 from time import time
 import importlib
-from utils import AccCounter, uniquify, load_model
+from utils import AccCounter, uniquify, load_model, Ensemble
 from time import time
 
 
@@ -36,6 +36,7 @@ parser.add_argument('--data', '-d', default='test', help='Either \'train\' or \'
 parser.add_argument('--acc', default='test', help='Either \'train\' or \'test\' -- to calculate accuracy')
 parser.add_argument('--log_dir', help='Directory for logging')
 parser.add_argument('--bs', type=int, nargs='+', default=[200], help='Batch size')
+parser.add_argument('--test_augmentation', action='store_true')
 
 args = parser.parse_args()
 
@@ -47,10 +48,24 @@ net = load_model(args.model, print_info=True)
 
 print('==> Preparing data ...')
 
+transform_test = transforms.Compose([
+    transforms.ToTensor(),
+])
+
+transform_train = transforms.Compose([
+    transforms.RandomCrop(32, padding=4),
+    transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+])
+
 testset = torchvision.datasets.CIFAR10(root='./data', train=False,
-                                            download=True)
+                                       download=True,
+                                       transform=transform_train if args.test_augmentation else transform_test)
 test_data = testset.test_data.astype(float).transpose((0, 3, 1, 2))
 test_labels = np.array(testset.test_labels)
+testloader = torch.utils.data.DataLoader(testset,
+                                         batch_size=testset.test_data.shape[0],
+                                         shuffle=True, num_workers=2)
 
 
 trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
@@ -64,6 +79,7 @@ filename = uniquify('{}/batch_avg_{}_logs_{}_acc'.format(args.log_dir,
                                                          args.acc))
 
 with open(filename, 'w') as f:
+    f.write('# test augmentation {}\n'.format(args.test_augmentation))
     f.write('n_infer,batch_size,acc\n')
 
 print('==> Start experiment')
@@ -72,23 +88,28 @@ net.train()
 
 acc_data = test_data if args.acc == 'test' else train_data
 acc_labels = test_labels if args.acc == 'test' else train_labels
-
+loader = testloader if args.acc == 'test' else trainloader
 for n_infer, BS in product(args.n_inferences, args.bs):
     start_time = time()
-    logits = np.zeros([acc_data.shape[0], 10])
+    ens = Ensemble()
 
     if args.data == 'test' or args.acc == 'train':
+        logits = np.zeros([acc_data.shape[0], 10])
         for _ in range(n_infer):
-            perm = np.random.permutation(np.arange(acc_data.shape[0]))
-            for i in range(0, len(perm), BS):
-                idxs = perm[i: i + BS]
-                inputs = Variable(torch.Tensor(acc_data[idxs] / 255.).cuda(async=True))
-                outputs = net(inputs)
+            for x, y in loader:
+                acc_data, acc_labels = x.numpy(), y.numpy()
+                perm = np.random.permutation(np.arange(acc_data.shape[0]))
+                for i in range(0, len(perm), BS):
+                    idxs = perm[i: i + BS]
+                    inputs = Variable(torch.Tensor(acc_data[idxs]).cuda(async=True))
+                    outputs = net(inputs)
+                    logits[idxs] += outputs.cpu().data.numpy()
 
-                logits[idxs] += outputs.cpu().data.numpy()
+        ens.add_estimator(logits)
     else:
         for i, x in enumerate(test_data):
             for _ in range(n_infer):
+                logits = np.zeros([acc_data.shape[0], 10])
                 batch = train_data[np.random.choice(train_data.shape[0], BS, replace=False)]
                 batch[0] = x
                 inputs = Variable(torch.Tensor(batch / 255.).cuda(async=True))
@@ -96,9 +117,10 @@ for n_infer, BS in product(args.n_inferences, args.bs):
 
                 logits[i] += outputs.cpu().data.numpy()[0]
 
+            ens.add_estimator(logits)
 
     counter = AccCounter()
-    counter.add(logits, acc_labels)
+    counter.add(ens.get_proba(), acc_labels)
     acc = counter.acc()
 
     print('{} inferences, batch size {} -- accuracy {}; time {:.3f} sec'.format(n_infer, BS, acc, time() - start_time))

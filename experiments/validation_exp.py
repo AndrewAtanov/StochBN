@@ -1,5 +1,4 @@
 from __future__ import print_function
-
 import torch
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
@@ -22,7 +21,7 @@ from torch.autograd import Variable
 import shutil
 from time import time
 import importlib
-from utils import AccCounter, uniquify, load_model, set_MyBN_strategy, set_collect
+from utils import AccCounter, uniquify, load_model, set_MyBN_strategy, set_collect, Ensemble
 from time import time
 
 
@@ -30,13 +29,18 @@ def cifar_accuracy(net, mode='test', random_strategy=False, tries=20):
     counter = AccCounter()
     loader = testloader if mode == 'test' else trainloader
     for i, (inputs, labels) in enumerate(loader):
+        ens = Ensemble()
+
         inputs, labels = Variable(inputs.cuda()), Variable(labels.cuda())
-        outputs = net(inputs).cpu().data.numpy()
+        # outputs = net(inputs).cpu().data.numpy()
+        ens.add_estimator(net(inputs).cpu().data.numpy())
         k = 1
         while random_strategy and k < tries:
-            outputs += net(inputs).cpu().data.numpy()
+            # outputs += net(inputs).cpu().data.numpy()
+            ens.add_estimator(net(inputs).cpu().data.numpy())
             k += 1
-        counter.add(outputs, labels.data.cpu().numpy())
+
+        counter.add(ens.get_proba(), labels.data.cpu().numpy())
     return counter.acc()
 
 use_cuda = torch.cuda.is_available()
