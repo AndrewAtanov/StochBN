@@ -36,7 +36,7 @@ parser.add_argument('--data', '-d', default='test', help='Either \'train\' or \'
 parser.add_argument('--acc', default='test', help='Either \'train\' or \'test\' -- to calculate accuracy')
 parser.add_argument('--log_dir', help='Directory for logging')
 parser.add_argument('--bs', type=int, nargs='+', default=[200], help='Batch size')
-parser.add_argument('--test_augmentation', action='store_true')
+parser.add_argument('--augmentation', action='store_true')
 
 args = parser.parse_args()
 
@@ -53,19 +53,19 @@ transform_test = transforms.Compose([
 ])
 
 transform_train = transforms.Compose([
+    transforms.ToPILImage(),
     transforms.RandomCrop(32, padding=4),
     transforms.RandomHorizontalFlip(),
     transforms.ToTensor(),
 ])
 
 testset = torchvision.datasets.CIFAR10(root='./data', train=False,
-                                       download=True,
-                                       transform=transform_train if args.test_augmentation else transform_test)
+                                       download=True)
 test_data = testset.test_data.astype(float).transpose((0, 3, 1, 2))
 test_labels = np.array(testset.test_labels)
 testloader = torch.utils.data.DataLoader(testset,
                                          batch_size=testset.test_data.shape[0],
-                                         shuffle=True, num_workers=2)
+                                         shuffle=False, num_workers=2)
 
 
 trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
@@ -79,7 +79,7 @@ filename = uniquify('{}/batch_avg_{}_logs_{}_acc'.format(args.log_dir,
                                                          args.acc))
 
 with open(filename, 'w') as f:
-    f.write('# test augmentation {}\n'.format(args.test_augmentation))
+    f.write('# test augmentation {}\n'.format(args.augmentation))
     f.write('n_infer,batch_size,acc\n')
 
 print('==> Start experiment')
@@ -88,7 +88,8 @@ net.train()
 
 acc_data = test_data if args.acc == 'test' else train_data
 acc_labels = test_labels if args.acc == 'test' else train_labels
-loader = testloader if args.acc == 'test' else trainloader
+# loader = testloader if args.acc == 'test' else trainloader
+
 for n_infer, BS in product(args.n_inferences, args.bs):
     start_time = time()
     ens = Ensemble()
@@ -96,14 +97,15 @@ for n_infer, BS in product(args.n_inferences, args.bs):
     if args.data == 'test' or args.acc == 'train':
         logits = np.zeros([acc_data.shape[0], 10])
         for _ in range(n_infer):
-            for x, y in loader:
-                acc_data, acc_labels = x.numpy(), y.numpy()
-                perm = np.random.permutation(np.arange(acc_data.shape[0]))
-                for i in range(0, len(perm), BS):
-                    idxs = perm[i: i + BS]
-                    inputs = Variable(torch.Tensor(acc_data[idxs]).cuda(async=True))
-                    outputs = net(inputs)
-                    logits[idxs] += outputs.cpu().data.numpy()
+            if args.augmentation:
+                acc_data = np.array(list(map(lambda x: transform_train(x).numpy(),
+                                             test_data if args.acc == 'test' else train_data)))
+            perm = np.random.permutation(np.arange(acc_data.shape[0]))
+            for i in range(0, len(perm), BS):
+                idxs = perm[i: i + BS]
+                inputs = Variable(torch.Tensor(acc_data[idxs]).cuda(async=True))
+                outputs = net(inputs)
+                logits[idxs] += outputs.cpu().data.numpy()
 
         ens.add_estimator(logits)
     else:
