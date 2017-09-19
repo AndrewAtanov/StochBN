@@ -139,7 +139,7 @@ class _MyBatchNorm(nn.Module):
 
             mean = data_mean / bs + (bs - 1) / bs * sampled_mean
             var = torch.sum((input.data - mean.view(-1, self.num_features, 1, 1).expand_as(input.data)) ** 2, dim=2).sum(2)
-            var = var / (bs * k - 1) +  self.running_var * chi2 / (bs * k - 1)
+            var = var / (bs * k - 1) +  self.running_var.view((1, -1)).expand_as(chi2) * chi2 / (bs * k - 1)
             var += n * k / ((bs**2) * (bs * k - 1)) * (data_mean - sampled_mean) ** 2
 
 
@@ -152,68 +152,15 @@ class _MyBatchNorm(nn.Module):
             self.cur_mean.copy_(torch.zeros(self.cur_mean.size()))
             self.cur_var.copy_(torch.ones(self.cur_var.size()))
 
-            # output.copy_(input.data - self.running_mean.view((1, -1, 1, 1)).expand_as(input))
-            # output.copy_(output / torch.sqrt(self.running_var.view((1, -1, 1, 1)) + self.eps).expand_as(input))
-            # output.copy_(output * self.weight.data.view((1, -1, 1, 1)).expand_as(input))
-            # output.copy_(output + self.bias.data.view((1, -1, 1, 1)).expand_as(input))
-
             output.data.copy_(input.data - mean.view(-1, self.num_features, 1, 1).expand_as(input))
             output.data.copy_(output.data / torch.sqrt(var.view(-1, self.num_features, 1, 1)).expand_as(input))
 
 
-            # return output
             return F.batch_norm(output, self.cur_mean, self.cur_var,
                                 self.weight, self.bias, False,
                                 self.momentum, 0)
-            #
-            #
-            # if input.data.size()[0] > 1:
-            #     return F.batch_norm(input, self.cur_mean, self.cur_var,
-            #                         self.weight, self.bias,
-            #                         True, self.momentum, self.eps)
-            #
-            # is_cuda = self.running_mean.is_cuda
-            # dims = [-1] + [1] * (len(input.data[0].size()) - 1)
-            # # size = input.data[0].size()
-            # bs = int(self.test_mode.split('-')[-1])
-            # _pass = self.test_mode.split('-')[1] == 'pass'
-            #
-            # h, w = input.data.size()[2:]
-            #
-            # batch = torch.normal(self.running_mean.view(1, -1, 1, 1).expand(bs - 1, self.num_features, h, w),
-            #                      torch.sqrt(self.running_var.view(1, -1, 1, 1).expand(bs - 1, self.num_features, h, w)))
-            #
-            # if is_cuda:
-            #     batch = batch.cuda()
-            #
-            # res = F.batch_norm(torch.cat([input, batch]),
-            #                     self.cur_mean, self.cur_var,
-            #                     self.weight, self.bias,
-            #                     True, self.momentum, self.eps)
-            #
-            # return res if _pass else res[:1]
-
-            # k = float(sum(input.data.size()[2:]))
-            #
-            # x_mean = input.data[0].mean(1).mean(1)
-            #
-            # chi2 = torch.randn(int((bs - 1) * k - 1), self.num_features).sum(dim=0).squeeze()
-            # norm = torch.normal(self.running_mean, torch.sqrt(self.running_var))
-            #
-            # if is_cuda:
-            #     norm = norm.cuda()
-            #     chi2 = chi2.cuda()
-            #
-            # chi2 *= torch.sqrt(self.running_var) / (bs - 1) / k
-            #
-            # self.cur_mean.copy_(norm * (bs - 1) / bs + x_mean / bs)
-            # tmp = ((input.data[0] - self.cur_mean.view(dims).expand(size)) ** 2).sum(dim=1).sum(dim=1) / (bs * k - 1)
-            # tmp += ((bs - 1) * k - 1) / (bs * k - 1) / ((bs - 1) * k) * chi2
-            # tmp += ((x_mean - norm) ** 2) * (bs - 1) * k / bs / (bs * k - 1)
-            # self.cur_var.copy_(tmp)
 
         self.cur_mean.copy_(self.running_mean)
-
 
         if self.mean_strategy == 'random':
             self.cur_mean.copy_(torch.normal(self.mean_mean, torch.sqrt(self.mean_var)))
@@ -236,7 +183,6 @@ class _MyBatchNorm(nn.Module):
             self.cur_var.copy_(torch.Tensor(val))
         elif self.var_strategy == 'collected':
             self.cur_var.copy_(self.sum_var / (self.n_samples * 1.))
-
         try:
             return F.batch_norm(
                 input, self.cur_mean, self.cur_var, self.weight, self.bias,
