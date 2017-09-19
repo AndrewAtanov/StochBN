@@ -139,8 +139,8 @@ class _MyBatchNorm(nn.Module):
 
             mean = data_mean / bs + (bs - 1) / bs * sampled_mean
             var = torch.sum((input.data - mean.view(-1, self.num_features, 1, 1).expand_as(input.data)) ** 2, dim=2).sum(2)
-            var = var / (bs * k - 1) + (n * k - 1) / (bs * k - 1) / (n * k) * self.running_var * chi2
-            var += n * k / (bs * (bs * k - 1)) * (data_mean - sampled_mean) ** 2
+            var = var / (bs * k - 1) +  self.running_var * chi2 / (bs * k - 1)
+            var += n * k / ((bs**2) * (bs * k - 1)) * (data_mean - sampled_mean) ** 2
 
 
             output = Variable(torch.zeros(input.size()))
@@ -158,7 +158,8 @@ class _MyBatchNorm(nn.Module):
             # output.copy_(output + self.bias.data.view((1, -1, 1, 1)).expand_as(input))
 
             output.data.copy_(input.data - mean.view(-1, self.num_features, 1, 1).expand_as(input))
-            output.data.copy_(output.data / torch.sqrt(var.view(-1, self.num_features, 1, 1).expand_as(input)))
+            output.data.copy_(output.data / torch.sqrt(var.view(-1, self.num_features, 1, 1)).expand_as(input))
+
 
             # return output
             return F.batch_norm(output, self.cur_mean, self.cur_var,
