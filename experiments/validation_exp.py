@@ -48,6 +48,7 @@ use_cuda = torch.cuda.is_available()
 if use_cuda:
     torch.cuda.random.manual_seed(42)
 np.random.seed(42)
+torch.manual_seed(42)
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--model', '-m', help='Model checkpoint filename')
@@ -69,7 +70,7 @@ transform_test = transforms.Compose([
 ])
 testset = torchvision.datasets.CIFAR10(root='./data', train=False,
                                        download=True, transform=transform_test)
-testloader = torch.utils.data.DataLoader(testset, batch_size=200, shuffle=False,
+testloader = torch.utils.data.DataLoader(testset, batch_size=10, shuffle=False,
                                          num_workers=2)
 
 transform_train = transforms.Compose([
