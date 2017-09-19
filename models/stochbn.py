@@ -4,6 +4,7 @@ import torch.nn.functional as F
 # from .module import Module
 from torch.nn.parameter import Parameter
 import numpy as np
+from torch.autograd import Variable
 
 
 class _MyBatchNorm(nn.Module):
@@ -126,7 +127,7 @@ class _MyBatchNorm(nn.Module):
             # TODO: impliment for different dimensions
             data_mean = input.mean(dim=2).mean(dim=2).data
 
-            sampled_mean = torch.randn(data_mean.size()[:2])
+            sampled_mean = torch.randn(data_mean.size())
             chi2 = torch.FloatTensor(np.random.chisquare(int(n * k) - 1,
                                                          size=input.size()[:2]))
             if is_cuda:
@@ -141,20 +142,28 @@ class _MyBatchNorm(nn.Module):
             var = var / (bs * k - 1) + (n * k - 1) / (bs * k - 1) / (n * k) * self.running_var * chi2
             var += n * k / (bs * (bs * k - 1)) * (data_mean - sampled_mean) ** 2
 
+
+            output = Variable(torch.zeros(input.size()))
             if is_cuda:
                 mean = mean.cuda()
                 var = var.cuda()
+                output = output.cuda()
 
             self.cur_mean.copy_(torch.zeros(self.cur_mean.size()))
             self.cur_var.copy_(torch.ones(self.cur_var.size()))
 
-            input.data -= mean.view(-1, self.num_features, 1, 1).expand_as(input)
-            input.data /= torch.sqrt(var.view(-1, self.num_features, 1, 1).expand_as(input))
+            # output.copy_(input.data - self.running_mean.view((1, -1, 1, 1)).expand_as(input))
+            # output.copy_(output / torch.sqrt(self.running_var.view((1, -1, 1, 1)) + self.eps).expand_as(input))
+            # output.copy_(output * self.weight.data.view((1, -1, 1, 1)).expand_as(input))
+            # output.copy_(output + self.bias.data.view((1, -1, 1, 1)).expand_as(input))
 
-            return F.batch_norm(input, self.cur_mean, self.cur_var,
-                                self.weight, self.bias,
-                                True, self.momentum, self.eps)
+            output.data.copy_(input.data - mean.view(-1, self.num_features, 1, 1).expand_as(input))
+            output.data.copy_(output.data / torch.sqrt(var.view(-1, self.num_features, 1, 1).expand_as(input)))
 
+            # return output
+            return F.batch_norm(output, self.cur_mean, self.cur_var,
+                                self.weight, self.bias, False,
+                                self.momentum, 0)
             #
             #
             # if input.data.size()[0] > 1:
