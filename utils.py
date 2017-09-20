@@ -25,6 +25,25 @@ def uniquify(path, sep = ''):
         tempfile._name_sequence = orig
     return filename
 
+class Ensemble:
+    def __init__(self):
+        self.__n_estimators = 0
+        self.cum_proba = 0
+
+    def add_estimator(self, logits):
+        l = np.exp(logits - logits.max(1)[:,np.newaxis])
+        try:
+            assert not np.isnan(l).any(), 'NaNs while computing softmax'
+            self.cum_proba += l / l.sum(1)[:,np.newaxis]
+            assert not np.isnan(self.cum_proba).any(), 'NaNs while computing softmax'
+        except:
+            print(' Save logits to dubug.npy ')
+            np.save('dubug.npy', logits)
+            raise
+        self.__n_estimators += 1
+
+    def get_proba(self):
+        return self.cum_proba / self.__n_estimators
 
 class AccCounter:
     def __init__(self):
