@@ -99,10 +99,8 @@ def set_StochBN_test_mode(net, mode):
 
 
 def make_description(args):
-    desc = ""
-    for k, v in vars(args).items():
-        desc += '#{}:{}\n'.format(k, v)
-    return desc
+    args.script = os.path.basename(__file__)
+    return '{}'.format(vars(args))
 
 
 def load_model(filename, print_info=False):

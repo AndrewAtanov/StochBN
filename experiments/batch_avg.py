@@ -76,7 +76,7 @@ train_data = trainset.train_data.astype(float).transpose((0, 3, 1, 2))
 train_labels = trainset.train_labels
 
 
-filename = uniquify('{}/batch_avg')
+filename = uniquify(os.path.join(args.log_dir, 'batch_avg'))
 
 with open(filename, 'w') as f:
     f.write('#{}\n'.format(make_description(args)))
