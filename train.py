@@ -4,7 +4,7 @@ from __future__ import print_function
 import torch
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
-from utils import AccCounter, class_for_name
+from utils import *
 
 import torchvision
 import torchvision.transforms as transforms
@@ -29,9 +29,11 @@ np.random.seed(42)
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.001, type=float, help='start learning rate')
 parser.add_argument('--epochs', default=200, type=int, help='number of epochs')
+parser.add_argument('--bs', default=128, type=int, help='batch size')
 parser.add_argument('--decrease_from', default=100, type=int, help='Epoch to decrease lr linear to 0 from')
 parser.add_argument('--log_dir', help='Directory for logging')
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
+parser.add_argument('--augmentation', '-a', action='store_true', help='resume from checkpoint')
 parser.add_argument('--model', '-m', default='ResNet18', help='Model')
 parser.add_argument('--decay', default=None, type=float,
                     help='Decay rate')
@@ -53,11 +55,12 @@ transform_test = transforms.Compose([
     transforms.ToTensor(),
 ])
 
-trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=128, shuffle=True, num_workers=2)
+trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True,
+                                        transform=transform_train if args.augmentation else transform_test)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.bs, shuffle=True, num_workers=2)
 
 testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
-testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=2)
+testloader = torch.utils.data.DataLoader(testset, batch_size=200, shuffle=False, num_workers=2)
 
 classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
@@ -87,6 +90,7 @@ if args.resume:
 
 
 with open('{}/log'.format(args.log_dir), 'w') as f:
+    f.write('#{}\n'.format(make_description(args)))
     f.write('epoch,loss,train_acc,test_acc\n')
 
 
@@ -165,6 +169,7 @@ for epoch in range(args.epochs):
         'test_accuracy': counter.acc(),
         'optimizer': optimizer.state_dict(),
         'net': net.module if use_cuda else net,
+        'name': args.model,
     }, prev_test_acc < counter.acc())
 
     with open('{}/log'.format(args.log_dir), 'a') as f:

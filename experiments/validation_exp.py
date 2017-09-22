@@ -21,7 +21,7 @@ from torch.autograd import Variable
 import shutil
 from time import time
 import importlib
-from utils import AccCounter, uniquify, load_model, set_MyBN_strategy, set_collect, Ensemble
+from utils import *
 from time import time
 
 
@@ -43,13 +43,6 @@ def cifar_accuracy(net, mode='test', random_strategy=False, tries=20):
         counter.add(ens.get_proba(), labels.data.cpu().numpy())
     return counter.acc()
 
-use_cuda = torch.cuda.is_available()
-
-if use_cuda:
-    torch.cuda.random.manual_seed(42)
-np.random.seed(42)
-torch.manual_seed(42)
-
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--model', '-m', help='Model checkpoint filename')
 parser.add_argument('--log_dir', default='./', help='Directory for logs')
@@ -58,8 +51,16 @@ parser.add_argument('--strategies', '-s', default=['vanilla', 'mean', 'random'],
 parser.add_argument('--tries', '-t', nargs='+', type=int,
                     help='Number of tries for random strategy')
 parser.add_argument('--train_passes', default=[1], nargs='+', type=int)
+parser.add_argument('--train_passes', default=42, type=int)
 parser.add_argument('--train_augnentation', action='store_true')
 args = parser.parse_args()
+
+use_cuda = torch.cuda.is_available()
+if use_cuda:
+    torch.cuda.random.manual_seed(args.seed)
+np.random.seed(args.seed)
+torch.manual_seed(args.seed)
+
 
 print('==> Load model...')
 net = load_model(args.model, print_info=True)
@@ -101,7 +102,7 @@ log_fn = uniquify('{}/validation_exp'.format(args.log_dir))
 print('==> Start experiment')
 
 with open(log_fn, 'w') as f:
-    f.write('# Train augmentation - {}\n'.format(args.train_augnentation))
+    f.write('#{}\n'.format(make_description(args)))
     f.write('mean,var,tries,data_passes,acc\n')
 
 passes_done = 0

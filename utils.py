@@ -98,6 +98,13 @@ def set_StochBN_test_mode(net, mode):
             m.test_mode = mode
 
 
+def make_description(args):
+    desc = ""
+    for k, v in vars(args).items():
+        desc += '#{}:{}\n'.format(k, v)
+    return desc
+
+
 def load_model(filename, print_info=False):
     use_cuda = torch.cuda.is_available()
     chekpoint = torch.load(filename)
