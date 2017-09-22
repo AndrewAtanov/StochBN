@@ -34,6 +34,7 @@ parser.add_argument('--seed', default=42, type=int)
 parser.add_argument('--first', action='store_true', help='Sample only on first BN layer.')
 parser.add_argument('--augmentation', '-a', action='store_true', help='Add augmentation to data')
 args = parser.parse_args()
+args.script = os.path.basename(__file__)
 
 torch.cuda.random.manual_seed(args.seed)
 torch.manual_seed(args.seed)

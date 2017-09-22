@@ -54,6 +54,7 @@ parser.add_argument('--train_passes', default=[1], nargs='+', type=int)
 parser.add_argument('--train_passes', default=42, type=int)
 parser.add_argument('--train_augnentation', action='store_true')
 args = parser.parse_args()
+args.script = os.path.basename(__file__)
 
 use_cuda = torch.cuda.is_available()
 if use_cuda:

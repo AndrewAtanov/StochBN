@@ -38,6 +38,7 @@ parser.add_argument('--model', '-m', default='ResNet18', help='Model')
 parser.add_argument('--decay', default=None, type=float,
                     help='Decay rate')
 args = parser.parse_args()
+args.script = os.path.basename(__file__)
 
 use_cuda = torch.cuda.is_available()
 best_acc = 0  # best test accuracy

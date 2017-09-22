@@ -1,0 +1,5 @@
+#{'acc': 'test', 'script': 'batch_avg.py', 'n_inferences': [100], 'seed': 2, 'augmentation': True, 'log_dir': 'StochBN/results/resnet18/', 'bs': [50, 100, 200], 'model': 'resnet18/best_model', 'data': 'test', 'permute': True}
+n_infer,batch_size,acc
+100,50,0.9439
+100,100,0.9449
+100,200,0.9436

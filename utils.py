@@ -99,7 +99,6 @@ def set_StochBN_test_mode(net, mode):
 
 
 def make_description(args):
-    args.script = os.path.basename(__file__)
     return '{}'.format(vars(args))
 
 
