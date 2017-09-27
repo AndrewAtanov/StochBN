@@ -125,8 +125,8 @@ for n_infer, BS in product(args.n_inferences, args.bs):
         counter = AccCounter()
         counter.add(ens.get_proba(), acc_labels)
     else:
-        train_data = np.array(list(map(lambda x: transform_test(x).numpy(), train_data)))
-        for i, [x, y] in enumerate(zip(test_data, test_labels)):
+        train_data = trainset.train_data
+        for i, [x, y] in enumerate(zip(testset.test_data, testset.test_labels)):
             batch = train_data[np.random.choice(train_data.shape[0], BS, replace=False)]
             ens = Ensemble()
             for _ in range(n_infer):
