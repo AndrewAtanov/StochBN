@@ -7,6 +7,9 @@ from torch.nn.parallel import DataParallel
 import torch
 from models import *
 import importlib
+import sys
+import pickle
+import torchvision
 
 
 def uniquify(path, sep = ''):
@@ -32,10 +35,10 @@ class Ensemble:
         self.cum_proba = 0
 
     def add_estimator(self, logits):
-        l = np.exp(logits - logits.max(1)[:,np.newaxis])
+        l = np.exp(logits - logits.max(1)[:, np.newaxis])
         try:
             assert not np.isnan(l).any(), 'NaNs while computing softmax'
-            self.cum_proba += l / l.sum(1)[:,np.newaxis]
+            self.cum_proba += l / l.sum(1)[:, np.newaxis]
             assert not np.isnan(self.cum_proba).any(), 'NaNs while computing softmax'
         except:
             print(' Save logits to dubug.npy ')
@@ -102,10 +105,10 @@ def make_description(args):
     return '{}'.format(vars(args))
 
 
-def load_model(filename, print_info=False):
+def load_model(filename, print_info=False, n_classes=10):
     use_cuda = torch.cuda.is_available()
     chekpoint = torch.load(filename)
-    net = class_for_name('models', chekpoint['name'])()
+    net = class_for_name('models', chekpoint['name'])(n_classes)
     if use_cuda:
         net = DataParallel(net, device_ids=range(torch.cuda.device_count()))
 
@@ -115,3 +118,87 @@ def load_model(filename, print_info=False):
         print('Net validation accuracy = {}'.format(chekpoint['test_accuracy']))
 
     return net
+
+
+class CIFAR(torchvision.datasets.CIFAR10):
+    """`CIFAR10 <https://www.cs.toronto.edu/~kriz/cifar.html>`_ Dataset with several classes.
+    Args:
+        root (string): Root directory of dataset where directory
+            ``cifar-10-batches-py`` exists.
+        train (bool, optional): If True, creates dataset from training set, otherwise
+            creates from test set.
+        transform (callable, optional): A function/transform that  takes in an PIL image
+            and returns a transformed version. E.g, ``transforms.RandomCrop``
+        target_transform (callable, optional): A function/transform that takes in the
+            target and transforms it.
+        download (bool, optional): If true, downloads the dataset from the internet and
+            puts it in root directory. If dataset is already downloaded, it is not
+            downloaded again.
+    """
+    def __init__(self, root, train=True,
+                 transform=None, target_transform=None,
+                 download=False, classes=None):
+
+        if classes is None:
+            classes = np.arange(10)
+
+        self.classes = classes[:]
+
+        self.root = os.path.expanduser(root)
+        self.transform = transform
+        self.target_transform = target_transform
+        self.train = train  # training set or test set
+
+        if download:
+            self.download()
+
+        if not self._check_integrity():
+            raise RuntimeError('Dataset not found or corrupted.' +
+                               ' You can use download=True to download it')
+
+        # now load the picked numpy arrays
+        if self.train:
+            self.train_data = []
+            self.train_labels = []
+            for fentry in self.train_list:
+                f = fentry[0]
+                file = os.path.join(self.root, self.base_folder, f)
+                fo = open(file, 'rb')
+                if sys.version_info[0] == 2:
+                    entry = pickle.load(fo)
+                else:
+                    entry = pickle.load(fo, encoding='latin1')
+                self.train_data.append(entry['data'])
+                if 'labels' in entry:
+                    self.train_labels += entry['labels']
+                else:
+                    self.train_labels += entry['fine_labels']
+                fo.close()
+
+            mask = np.isin(self.train_labels, classes)
+            self.train_labels = [classes.index(l) for l, cond in zip(self.train_labels, mask) if cond]
+
+            self.train_data = np.concatenate(self.train_data)
+            self.train_data = self.train_data.reshape((50000, 3, 32, 32))[mask]
+            self.train_data = self.train_data.transpose((0, 2, 3, 1))
+        else:
+            f = self.test_list[0][0]
+            file = os.path.join(self.root, self.base_folder, f)
+            fo = open(file, 'rb')
+            if sys.version_info[0] == 2:
+                entry = pickle.load(fo)
+            else:
+                entry = pickle.load(fo, encoding='latin1')
+            self.test_data = entry['data']
+            if 'labels' in entry:
+                self.test_labels = entry['labels']
+            else:
+                self.test_labels = entry['fine_labels']
+            fo.close()
+
+            mask = np.isin(self.test_labels, classes)
+            self.test_labels = [classes.index(l) for l, cond in zip(self.test_labels, mask) if cond]
+
+            self.test_data = self.test_data.reshape((10000, 3, 32, 32))[mask]
+            self.test_data = self.test_data.transpose((0, 2, 3, 1))  # convert to HWC
+

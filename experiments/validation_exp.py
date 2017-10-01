@@ -51,8 +51,11 @@ parser.add_argument('--strategies', '-s', default=['vanilla', 'mean', 'random'],
 parser.add_argument('--tries', '-t', nargs='+', type=int,
                     help='Number of tries for random strategy')
 parser.add_argument('--train_passes', default=[1], nargs='+', type=int)
-parser.add_argument('--train_passes', default=42, type=int)
-parser.add_argument('--train_augnentation', action='store_true')
+parser.add_argument('--bs', default=128, type=int)
+parser.add_argument('--augmentation', dest='augmentation', action='store_true')
+parser.add_argument('--no-augmentation', dest='augmentation', action='store_false')
+parser.set_defaults(augmentation=True)
+parser.add_argument('--seed', type=int, default=42)
 args = parser.parse_args()
 args.script = os.path.basename(__file__)
 
@@ -70,33 +73,27 @@ print('==> Load data...')
 transform_test = transforms.Compose([
     transforms.ToTensor(),
 ])
-testset = torchvision.datasets.CIFAR10(root='./data', train=False,
-                                       download=True, transform=transform_test)
-testloader = torch.utils.data.DataLoader(testset, batch_size=10, shuffle=False,
-                                         num_workers=2)
-
 transform_train = transforms.Compose([
     transforms.RandomCrop(32, padding=4),
     transforms.RandomHorizontalFlip(),
     transforms.ToTensor(),
 ])
+
+testset = torchvision.datasets.CIFAR10(root='./data', train=False,
+                                       download=True,
+                                       transform=transform_train if args.augmentation else transform_test)
+testloader = torch.utils.data.DataLoader(testset, batch_size=200, shuffle=False,
+                                         num_workers=2)
+
 trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
                                         download=True,
-                                        transform=transform_train if args.train_augnentation else transform_test)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=128,
+                                        transform=transform_train)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.bs,
                                           shuffle=True, num_workers=2)
 
 
 net.eval()
-print('Vanilla train accuracy', cifar_accuracy(net, 'train'))
-
-net.train()
-# set_collect(net)
-# print('Train acc', cifar_accuracy(net, 'train'))
-# for _ in range(args.train_passes - 1):
-#     cifar_accuracy(net, 'train')
-#
-# set_collect(net, mode=False)
+# print('Vanilla train accuracy', cifar_accuracy(net, 'train'))
 
 log_fn = uniquify('{}/validation_exp'.format(args.log_dir))
 
@@ -109,6 +106,8 @@ with open(log_fn, 'w') as f:
 passes_done = 0
 for n_passes in args.train_passes:
     print('--   ', n_passes, '   --')
+
+    net.train()
     set_collect(net)
     while passes_done < n_passes:
         cifar_accuracy(net, 'train')

@@ -32,6 +32,7 @@ parser.add_argument('--acc', default='test', help='Either \'train\' or \'test\' 
 parser.add_argument('--log_dir', help='Directory for logging')
 parser.add_argument('--bs', type=int, nargs='+', default=[200], help='Batch size')
 parser.add_argument('--seed', type=int, default=42)
+parser.add_argument('--eval', action='store_true')
 parser.add_argument('--augmentation', dest='augmentation', action='store_true')
 parser.add_argument('--no-augmentation', dest='augmentation', action='store_false')
 parser.set_defaults(augmentation=True)
@@ -90,6 +91,9 @@ with open(filename, 'w') as f:
 print('==> Start experiment')
 
 net.train()
+
+if args.eval:
+    net.eval()
 
 acc_data = test_data if args.acc == 'test' else train_data
 acc_labels = test_labels if args.acc == 'test' else train_labels
