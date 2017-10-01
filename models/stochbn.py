@@ -118,56 +118,92 @@ class _MyBatchNorm(nn.Module):
                     self.bias, False, self.momentum, self.eps)
 
         if 'sample' in self.test_mode:
+            if input.data.size()[0] > 1:
+                return F.batch_norm(input, self.cur_mean, self.cur_var,
+                                    self.weight, self.bias,
+                                    True, self.momentum, self.eps)
+
             is_cuda = self.running_mean.is_cuda
-            bs = float(self.test_mode.split('-')[-1])
-            n = bs - 1
+            dims = [-1] + [1] * (len(input.data[0].size()) - 1)
+            # size = input.data[0].size()
+            bs = int(self.test_mode.split('-')[-1])
+            _pass = self.test_mode.split('-')[1] == 'pass'
+
             h, w = input.data.size()[2:]
-            k = h * w * 1.
 
-            # TODO: impliment for different dimensions
-            data_mean = input.mean(dim=2).mean(dim=2).data
+            batch = torch.normal(self.running_mean.view(1, -1, 1, 1).expand(bs - 1, self.num_features, h, w),
+                                 torch.sqrt(self.running_var.view(1, -1, 1, 1).expand(bs - 1, self.num_features, h, w)))
 
-            sampled_mean = torch.randn(data_mean.size())
-            chi2 = torch.FloatTensor(np.random.chisquare(int(n * k) - 1,
-                                                         size=input.size()[:2]))
             if is_cuda:
-                chi2 = chi2.cuda()
-                sampled_mean = sampled_mean.cuda()
+                batch = batch.cuda()
 
-            sampled_mean *= torch.sqrt(self.running_var / n / k).view(1, -1).expand_as(sampled_mean)
-            sampled_mean += self.running_mean.view(1, -1).expand_as(sampled_mean)
+            res = F.batch_norm(torch.cat([input, batch]),
+                                self.cur_mean, self.cur_var,
+                                self.weight, self.bias,
+                                True, self.momentum, self.eps)
 
-            mean = data_mean / bs + (bs - 1) / bs * sampled_mean
-            var = torch.sum((input.data - mean.view(-1, self.num_features, 1, 1).expand_as(input.data)) ** 2, dim=2).sum(2)
-            var = var / (bs * k - 1) +  self.running_var.view((1, -1)).expand_as(chi2) * chi2 / (bs * k - 1)
-            var += n * k / ((bs**2) * (bs * k - 1)) * (data_mean - sampled_mean) ** 2
+            return res if _pass else res[:1]
 
+        # if 'sample' in self.test_mode:
+        #     is_cuda = self.running_mean.is_cuda
+        #     bs = float(self.test_mode.split('-')[-1])
+        #     n = bs - 1
+        #     h, w = input.data.size()[2:]
+        #     k = h * w * 1.
+        #
+        #     # TODO: impliment for different dimensions
+        #     data_mean = input.mean(dim=2).mean(dim=2).data
+        #
+        #     sampled_mean = torch.randn(data_mean.size())
+        #     chi2 = torch.FloatTensor(np.random.chisquare(int(n * k) - 1,
+        #                                                  size=input.size()[:2]))
+        #     if is_cuda:
+        #         chi2 = chi2.cuda()
+        #         sampled_mean = sampled_mean.cuda()
+        #
+        #     sampled_mean *= torch.sqrt(self.running_var / n / k).view(1, -1).expand_as(sampled_mean)
+        #     sampled_mean += self.running_mean.view(1, -1).expand_as(sampled_mean)
+        #
+        #     mean = data_mean / bs + (bs - 1) / bs * sampled_mean
+        #     var = torch.sum((input.data - mean.view(-1, self.num_features, 1, 1).expand_as(input.data)) ** 2, dim=2).sum(2)
+        #     var = var / (bs * k - 1) +  self.running_var.view((1, -1)).expand_as(chi2) * chi2 / (bs * k - 1)
+        #     var += n * k / ((bs**2) * (bs * k - 1)) * (data_mean - sampled_mean) ** 2
+        #
+        #
+        #     output = Variable(torch.zeros(input.size()))
+        #     if is_cuda:
+        #         mean = mean.cuda()
+        #         var = var.cuda()
+        #         output = output.cuda()
+        #
+        #     self.cur_mean.copy_(torch.zeros(self.cur_mean.size()))
+        #     self.cur_var.copy_(torch.ones(self.cur_var.size()))
+        #
+        #     output.data.copy_(input.data - mean.view(-1, self.num_features, 1, 1).expand_as(input))
+        #     output.data.copy_(output.data / torch.sqrt(var.view(-1, self.num_features, 1, 1)).expand_as(input))
+        #
+        #
+        #     return F.batch_norm(output, self.cur_mean, self.cur_var,
+        #                         self.weight, self.bias, False,
+        #                         self.momentum, 0)
 
-            output = Variable(torch.zeros(input.size()))
-            if is_cuda:
-                mean = mean.cuda()
-                var = var.cuda()
-                output = output.cuda()
-
-            self.cur_mean.copy_(torch.zeros(self.cur_mean.size()))
-            self.cur_var.copy_(torch.ones(self.cur_var.size()))
-
-            output.data.copy_(input.data - mean.view(-1, self.num_features, 1, 1).expand_as(input))
-            output.data.copy_(output.data / torch.sqrt(var.view(-1, self.num_features, 1, 1)).expand_as(input))
-
-
-            return F.batch_norm(output, self.cur_mean, self.cur_var,
-                                self.weight, self.bias, False,
-                                self.momentum, 0)
-
-        self.cur_mean.copy_(self.running_mean)
+        out = Variable(torch.zeros(input.size()))
+        running_means = self.running_mean.cpu().numpy()
 
         if self.mean_strategy == 'random':
-            self.cur_mean.copy_(torch.normal(self.mean_mean, torch.sqrt(self.mean_var)))
-        elif self.mean_strategy == 'collected':
-            self.cur_mean.copy_(self.mean_mean)
-
-        self.cur_var.copy_(self.running_var)
+            means = np.random.normal(loc=self.mean_mean.cpu().numpy(),
+                                     scale=torch.sqrt(self.mean_var).cpu().numpy(),
+                                     size=(input.size()[0], self.num_features))
+            means = np.array([np.clip(m, running_means * 0.9, running_means * 1.1) for m in means])
+            means = means[:, :, np.newaxis, np.newaxis]
+        elif self.mean_strategy == 'mean':
+            means = self.mean_mean.cpu().numpy()
+            means = np.tile(np.clip(means, running_means * 0.9, running_means * 1.1),
+                            (input.size()[0], 1))[:, :, np.newaxis, np.newaxis]
+        elif self.mean_strategy == 'vanilla':
+            means = np.tile(running_means, (input.size()[0], 1))[:,:,np.newaxis,np.newaxis]
+        else:
+            raise NotImplementedError('mean strategy {} not implemented'.format(self.mean_strategy))
 
         if self.var_strategy == 'random':
             cond = np.isnan(self.s) | (self.s < 1e-8)
@@ -177,18 +213,38 @@ class _MyBatchNorm(nn.Module):
             shape[cond] = 1
             scale[cond] = 1
 
-            val = np.random.gamma(shape, scale)
+            val = np.random.gamma(shape, scale, size=(input.size()[0], self.num_features))
 
-            val[cond] = (self.sum_var / (self.n_samples * 1.)).cpu().numpy()[cond]
-            self.cur_var.copy_(torch.Tensor(val))
-        elif self.var_strategy == 'collected':
-            self.cur_var.copy_(self.sum_var / (self.n_samples * 1.))
+            val[:, cond] = (self.sum_var / (self.n_samples * 1.)).cpu().numpy()[cond]
+            vars = val[:, :, np.newaxis, np.newaxis]
+
+        elif self.var_strategy == 'mean':
+            vars = np.tile((self.sum_var / (self.n_samples * 1.)).cpu().numpy(),
+                           (input.size()[0], 1))[:,:,np.newaxis,np.newaxis]
+        elif self.var_strategy == 'vanilla':
+            vars = np.tile(self.running_var.cpu().numpy(),
+                           (input.size()[0], 1))[:, :, np.newaxis, np.newaxis]
+        else:
+            raise NotImplementedError
+
+        means = torch.Tensor(means)
+        vars = torch.Tensor(vars)
+        if self.running_mean.is_cuda:
+            out = out.cuda()
+            means = means.cuda()
+            vars = vars.cuda()
+
+        out.data.copy_(input.data - means.expand_as(input))
+        out.data.copy_(out.data / torch.sqrt(vars + self.eps).expand_as(input))
+        self.cur_mean.zero_()
+        self.cur_var.fill_(1)
+
         try:
             return F.batch_norm(
-                input, self.cur_mean, self.cur_var, self.weight, self.bias,
-                self.training, self.momentum, self.eps)
+                out, self.cur_mean, self.cur_var, self.weight, self.bias,
+                False, self.momentum, 0)
         except:
-            print self, self.cur_mean, self.cur_var
+            print(self, self.cur_mean, self.cur_var)
             raise
 
     def __repr__(self):
