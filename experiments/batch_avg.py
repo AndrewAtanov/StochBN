@@ -23,6 +23,7 @@ from time import time
 import importlib
 from utils import *
 from time import time
+from models.stochbn import _MyBatchNorm
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--model', '-m', help='Trained model')
@@ -31,6 +32,7 @@ parser.add_argument('--data', '-d', default='test', help='Either \'train\' or \'
 parser.add_argument('--acc', default='test', help='Either \'train\' or \'test\' -- to calculate accuracy')
 parser.add_argument('--log_dir', help='Directory for logging')
 parser.add_argument('--bs', type=int, nargs='+', default=[200], help='Batch size')
+parser.add_argument('--layers_train_mode', type=int, nargs='*', default=[], help='Batch size')
 parser.add_argument('--seed', type=int, default=42)
 parser.add_argument('--eval', action='store_true')
 parser.add_argument('--augmentation', dest='augmentation', action='store_true')
@@ -91,6 +93,15 @@ with open(filename, 'w') as f:
 print('==> Start experiment')
 
 net.train()
+
+if args.layers_train_mode:
+    net.eval()
+    bns = []
+    for m in net.module.modules():
+        if isinstance(m, _MyBatchNorm):
+            bns.append(m)
+    for idx in args.layers_train_mode:
+        bns[idx].train()
 
 if args.eval:
     net.eval()
