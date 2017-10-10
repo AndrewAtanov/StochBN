@@ -5,10 +5,10 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 import numpy as np
 from torch.autograd import Variable
-
+import warnings
 
 class _MyBatchNorm(nn.Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, mode='vanilla'):
         super(_MyBatchNorm, self).__init__()
         self.num_features = num_features
         self.affine = affine
@@ -28,6 +28,7 @@ class _MyBatchNorm(nn.Module):
         self.register_buffer('cur_mean', torch.zeros(num_features))
         self.register_buffer('cur_var', torch.ones(num_features))
 
+        self.__global_mode = mode
         self.collect = False
         self.mode = 'vanilla'
         self.n_samples = 0
@@ -132,8 +133,84 @@ class _MyBatchNorm(nn.Module):
 
         self.n_samples = 0
 
+    def forward_stochbn(self, input):
+        F.batch_norm(
+            input, self.cur_mean, self.cur_var, self.weight, self.bias,
+            True, 1., self.eps)
+
+        if self.mean_strategy == 'batch' and self.var_strategy == 'batch':
+            return F.batch_norm(
+                input, self.running_mean, self.running_var, self.weight,
+                self.bias, True, 0., self.eps)
+
+        elif self.var_strategy == 'running' and self.mean_strategy == 'running':
+            return F.batch_norm(
+                input, self.running_mean, self.running_var, self.weight,
+                self.bias, False, 0., self.eps)
+        else:
+            if self.var_strategy == 'sample':
+                sampled_var = torch.normal(self.running_logvar_mean.view(1, -1).expand(input.size(0),
+                                                                                       self.num_features),
+                                           torch.sqrt(self.running_logvar_var).view(1, -1).expand(input.size(0),
+                                                                                                  self.num_features),
+                                           ).view(input.size(0), self.num_features, 1, 1)
+                sampled_var = torch.exp(sampled_var)
+            elif self.var_strategy == 'running':
+                sampled_var = self.running_var.view(1, -1).expand(input.size(0), self.num_features)
+                sampled_var = sampled_var.view(input.size(0), self.num_features, 1, 1)
+            elif self.var_strategy == 'batch':
+                sampled_var = self.cur_var.view(1, -1).expand(input.size(0), self.num_features)
+                sampled_var = sampled_var.view(input.size(0), self.num_features, 1, 1)
+            else:
+                raise NotImplementedError('Unknown var strategy: {}'.format(self.var_strategy))
+
+            if self.mean_strategy == 'sample':
+                sampled_mean = torch.normal(self.running_mean_mean.view(1, -1).expand(input.size(0), self.num_features),
+                                            torch.sqrt(self.running_mean_var).view(1, -1).expand(input.size(0),
+                                                                                                 self.num_features),
+                                            ).view(input.size(0), self.num_features, 1, 1)
+            elif self.mean_strategy == 'running':
+                sampled_mean = self.running_mean.view(1, -1).expand(input.size(0), self.num_features)
+                sampled_mean = sampled_mean.view(input.size(0), self.num_features, 1, 1)
+            elif self.mean_strategy == 'batch':
+                sampled_mean = self.cur_mean.view(1, -1).expand(input.size(0), self.num_features)
+                sampled_mean = sampled_mean.view(input.size(0), self.num_features, 1, 1)
+            else:
+                raise NotImplementedError('Unknown mean strategy: {}'.format(self.mean_strategy))
+
+            out = Variable(torch.zeros(input.size()))
+
+            if input.is_cuda:
+                out = out.cuda()
+                sampled_mean = sampled_mean.cuda()
+                sampled_var = sampled_var.cuda()
+
+            out.data.copy_(input.data - sampled_mean.expand_as(input))
+            out.data.copy_(out.data / torch.sqrt(sampled_var + self.eps).expand_as(input))
+
+            if self.training:
+                self.update_smoothed_stats()
+
+            self.cur_mean.zero_()
+            self.cur_var.fill_(1.)
+            return F.batch_norm(out, self.cur_mean, self.cur_var,
+                                self.weight, self.bias,
+                                False, 0., 0)
+
+    def forward_vanilla(self, input):
+        return F.batch_norm(
+            input, self.running_mean, self.running_var, self.weight, self.bias,
+            self.training, self.momentum, self.eps)
+
     def forward(self, input):
         self._check_input_dim(input)
+
+        if self.__global_mode == 'StochBN':
+            return self.forward_stochbn(input)
+        elif self.__global_mode == 'vanilla':
+            return self.forward_vanilla(input)
+        else:
+            warnings.warn('May be problem with this mode, because of refactoring!!!!', DeprecationWarning)
 
         if self.collect:
             res = F.batch_norm(
@@ -144,39 +221,53 @@ class _MyBatchNorm(nn.Module):
             return res
 
         if self.training:
-            if self.train_mode == 'vanilla':
+            if self.mean_strategy == 'batch' and self.var_strategy == 'batch':
                 return F.batch_norm(
-                    input, self.running_mean, self.running_var, self.weight,
-                    self.bias, self.training, self.momentum, self.eps)
-            elif self.train_mode == 'collected-stats':
-                F.batch_norm(
                     input, self.running_mean, self.running_var, self.weight,
                     self.bias, True, self.momentum, self.eps)
 
-                return F.batch_norm(
-                    input, self.running_mean, self.running_var, self.weight,
-                    self.bias, False, self.momentum, self.eps)
-
-            elif self.train_mode == 'collect-stats':
-                res = F.batch_norm(input, self.cur_mean, self.cur_var,
-                                   self.weight, self.bias,
-                                   True, 1., self.eps)
-                self.update_smoothed_stats()
-                return res
-            elif self.train_mode == 'sample-stats':
+            elif self.var_strategy == 'running' and self.mean_strategy == 'running':
                 F.batch_norm(
                     input, self.cur_mean, self.cur_var, self.weight, self.bias,
                     True, 1., self.eps)
 
-                sampled_var = torch.normal(self.running_logvar_mean.view(1, -1).expand(input.size(0),
-                                                                                       self.num_features),
-                                           torch.sqrt(self.running_logvar_var).view(1, -1).expand(input.size(0),
-                                                                                                  self.num_features),
-                                           ).view(input.size(0), self.num_features, 1, 1)
-                sampled_var = torch.exp(sampled_var)
-                sampled_mean = torch.normal(self.running_mean_mean.view(1, -1).expand(input.size(0), self.num_features),
-                                            torch.sqrt(self.running_mean_var).view(1, -1).expand(input.size(0), self.num_features),
-                                            ).view(input.size(0), self.num_features, 1, 1)
+                self.update_smoothed_stats()
+                return F.batch_norm(
+                    input, self.running_mean, self.running_var, self.weight,
+                    self.bias, False, 0., self.eps)
+            else:
+                F.batch_norm(
+                    input, self.cur_mean, self.cur_var, self.weight, self.bias,
+                    True, 1., self.eps)
+
+                if self.var_strategy == 'sample':
+                    sampled_var = torch.normal(self.running_logvar_mean.view(1, -1).expand(input.size(0),
+                                                                                           self.num_features),
+                                               torch.sqrt(self.running_logvar_var).view(1, -1).expand(input.size(0),
+                                                                                                      self.num_features),
+                                               ).view(input.size(0), self.num_features, 1, 1)
+                    sampled_var = torch.exp(sampled_var)
+                elif self.var_strategy == 'running':
+                    sampled_var = self.running_var.view(1, -1).expand(input.size(0), self.num_features)
+                    sampled_var = sampled_var.view(input.size(0), self.num_features, 1, 1)
+                elif self.var_strategy == 'batch':
+                    sampled_var = self.cur_var.view(1, -1).expand(input.size(0), self.num_features)
+                    sampled_var = sampled_var.view(input.size(0), self.num_features, 1, 1)
+                else:
+                    raise NotImplementedError('Unknown var strategy: {}'.format(self.var_strategy))
+
+                if self.mean_strategy == 'sample':
+                    sampled_mean = torch.normal(self.running_mean_mean.view(1, -1).expand(input.size(0), self.num_features),
+                                                torch.sqrt(self.running_mean_var).view(1, -1).expand(input.size(0), self.num_features),
+                                                ).view(input.size(0), self.num_features, 1, 1)
+                elif self.mean_strategy == 'running':
+                    sampled_mean = self.running_mean.view(1, -1).expand(input.size(0), self.num_features)
+                    sampled_mean = sampled_mean.view(input.size(0), self.num_features, 1, 1)
+                elif self.mean_strategy == 'batch':
+                    sampled_mean = self.cur_mean.view(1, -1).expand(input.size(0), self.num_features)
+                    sampled_mean = sampled_mean.view(input.size(0), self.num_features, 1, 1)
+                else:
+                    raise NotImplementedError('Unknown mean strategy: {}'.format(self.mean_strategy))
 
                 out = Variable(torch.zeros(input.size()))
 
@@ -193,20 +284,7 @@ class _MyBatchNorm(nn.Module):
                 self.cur_var.fill_(1.)
                 return F.batch_norm(out, self.cur_mean, self.cur_var,
                                     self.weight, self.bias,
-                                    True, 0., 0)
-            elif self.train_mode == 'running-stats':
-                res = F.batch_norm(input,
-                                   self.running_m, torch.exp(self.running_logvar),
-                                   self.weight, self.bias,
-                                   True, 0., self.eps)
-                F.batch_norm(
-                    input, self.cur_mean, self.cur_var, self.weight, self.bias,
-                    True, 1., self.eps)
-
-                self.update_smoothed_stats()
-                return res
-            else:
-                raise NotImplementedError('{} training mode dont implemented!'.format(self.train_mode))
+                                    False, 0., 0)
 
         if 'sample' in self.test_mode:
             if input.data.size()[0] > 1:

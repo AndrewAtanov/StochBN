@@ -44,7 +44,8 @@ parser.add_argument('--k', '-k', default=1, type=float, help='Model size for VGG
 parser.add_argument('--decay', default=None, type=float,
                     help='Decay rate')
 parser.add_argument('--finetune_bn', action='store_true')
-parser.add_argument('--training_mode', default='vanilla')
+parser.add_argument('--var_strategy', default='vanilla')
+parser.add_argument('--mean_strategy', default='vanilla')
 args = parser.parse_args()
 args.script = os.path.basename(__file__)
 
