@@ -87,6 +87,15 @@ def set_StochBN_train_mode(net, mode):
             m.train_mode = mode
 
 
+def get_model(model='ResNet18', k=1., **kwargs):
+    if 'ResNet' in model:
+        return class_for_name('models', model)()
+    elif 'VGG' in model:
+        return VGG(vgg_name=model, k=k)
+    else:
+        raise NotImplementedError('unknown {} model'.format(model))
+
+
 def class_for_name(module_name, class_name):
     # load the module, will raise ImportError if module cannot be loaded
     m = importlib.import_module(module_name)
@@ -105,14 +114,41 @@ def make_description(args):
     return '{}'.format(vars(args))
 
 
-def load_model(filename, print_info=False, n_classes=10):
+def manage_state(net, ckpt_state):
+    net_state = net.state_dict()
+    for name, _ in net_state.items():
+        if name in ckpt_state:
+            net_state[name] = ckpt_state[name]
+        # TODO: rewrite previous checkpoints and delete this
+        elif 'module.{}'.format(name) in ckpt_state:
+            net_state[name] = ckpt_state['module.{}'.format(name)]
+    return net_state
+
+
+def load_model(filename, print_info=False):
     use_cuda = torch.cuda.is_available()
     chekpoint = torch.load(filename)
-    net = class_for_name('models', chekpoint['name'])(n_classes)
+    # TODO: add net kwargs
+    net = get_model(chekpoint['name'], **chekpoint.get('model_args', {}))
+    net.load_state_dict(manage_state(net, chekpoint['state_dict']))
     if use_cuda:
         net = DataParallel(net, device_ids=range(torch.cuda.device_count()))
 
-    net.load_state_dict(chekpoint['state_dict'])
+    if print_info:
+        print('Net validation accuracy = {}'.format(chekpoint['test_accuracy']))
+
+    return net
+
+
+def load_optim(filename, print_info=False, n_classes=10):
+    use_cuda = torch.cuda.is_available()
+    chekpoint = torch.load(filename)
+    # TODO: add net kwargs
+    net = get_model(chekpoint['name'])
+    if use_cuda:
+        net = DataParallel(net, device_ids=range(torch.cuda.device_count()))
+
+    net.load_state_dict(manage_state(net, chekpoint['state_dict']))
 
     if print_info:
         print('Net validation accuracy = {}'.format(chekpoint['test_accuracy']))

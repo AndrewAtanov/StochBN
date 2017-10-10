@@ -14,6 +14,7 @@ import os
 import argparse
 
 from models import *
+from models.stochbn import _MyBatchNorm
 from torch.autograd import Variable
 
 import shutil
@@ -32,13 +33,18 @@ parser.add_argument('--epochs', default=200, type=int, help='number of epochs')
 parser.add_argument('--bs', default=128, type=int, help='batch size')
 parser.add_argument('--decrease_from', default=100, type=int, help='Epoch to decrease lr linear to 0 from')
 parser.add_argument('--log_dir', help='Directory for logging')
+parser.add_argument('--sample_stats_from', type=int, default=None)
+parser.add_argument('--start_tmode', type=int, default=None)
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
 parser.add_argument('--augmentation', dest='augmentation', action='store_true')
 parser.add_argument('--no-augmentation', dest='augmentation', action='store_false')
 parser.set_defaults(augmentation=True)
 parser.add_argument('--model', '-m', default='ResNet18', help='Model')
+parser.add_argument('--k', '-k', default=1, type=float, help='Model size for VGG')
 parser.add_argument('--decay', default=None, type=float,
                     help='Decay rate')
+parser.add_argument('--finetune_bn', action='store_true')
+parser.add_argument('--training_mode', default='vanilla')
 args = parser.parse_args()
 args.script = os.path.basename(__file__)
 
@@ -71,24 +77,36 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship'
 if args.resume:
     # Load checkpoint.
     print('==> Resuming from checkpoint..')
-    assert os.path.isfile(args.model), 'Error: no checkpoint directory found!'
+    assert os.path.isfile(args.model), 'Error: no checkpoint found!'
     checkpoint = torch.load('{}'.format(args.model))
-    net = class_for_name('models', checkpoint['name'])()
+    net = load_model(args.model)
     best_acc = checkpoint['test_accuracy']
+    print('Loaded model test accuracy: {}'.format(best_acc))
 else:
     print('==> Building model..')
-    net = class_for_name('models', args.model)()
+    net = get_model(**vars(args))
 
 
 if use_cuda:
     net.cuda()
     net = torch.nn.DataParallel(net, device_ids=range(torch.cuda.device_count()))
 
-criterion = nn.CrossEntropyLoss().cuda()
-optimizer = optim.Adam(net.parameters(), lr=args.lr)
 
-if args.resume:
-    net.load_state_dict(checkpoint['state_dict'])
+if args.finetune_bn:
+    params = []
+    for m in net.modules():
+        if isinstance(m, _MyBatchNorm):
+            for p in m.parameters():
+                params.append(p)
+else:
+    params = net.parameters()
+
+criterion = nn.CrossEntropyLoss().cuda()
+optimizer = optim.Adam(params, lr=args.lr)
+
+# TODO: manage optimizer state
+if args.resume and not args.finetune_bn:
+    # TODO: why it works?
     optimizer.load_state_dict(checkpoint['optimizer'])
 
 
@@ -101,14 +119,6 @@ def save_checkpoint(state, is_best):
     torch.save(state, '{}/model'.format(args.log_dir))
     if is_best:
         shutil.copyfile('{}/model'.format(args.log_dir), '{}/best_model'.format(args.log_dir))
-
-
-def logit2acc(outputs, targets):
-    if isinstance(outputs, np.ndarray):
-        return np.mean(outputs.argmax(axis=1) == targets.data.cpu().numpy())
-    else:
-        return np.mean(outputs.data.cpu().numpy().argmax(axis=1) == targets.data.cpu().numpy())
-
 
 def adjust_learning_rate(optimizer, lr):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
@@ -133,9 +143,21 @@ for epoch in range(args.epochs):
     t0 = time()
     lr = lr_exponential(epoch) if args.decay else lr_linear(epoch)
     adjust_learning_rate(optimizer, lr)
+
     net.train()
+    if args.training_mode == 'vanilla':
+        set_StochBN_train_mode(net, 'vanilla')
+    elif args.finetune_bn:
+        net.eval()
+    elif args.training_mode == 'sample-stats':
+        if args.sample_stats_from > (epoch + 1):
+            set_StochBN_train_mode(net, 'collect-stats')
+        else:
+            set_StochBN_train_mode(net, 'sample-stats')
+    elif args.training_mode == 'running-stats':
+        set_StochBN_train_mode(net, 'running-stats')
+
     training_loss = 0
-    # accs = []
     for i, (inputs, labels) in enumerate(trainloader, 0):
         # wrap data in Variable and put them on GPU
         inputs, labels = Variable(inputs.cuda(async=True)), Variable(labels.cuda(async=True))
@@ -145,7 +167,6 @@ for epoch in range(args.epochs):
 
         # forward + backward + optimize
         outputs = net(inputs)
-        # accs.append(logit2acc(outputs, labels))  # probably a bad way to calculate accuracy
         counter.add(outputs.data.cpu().numpy(), labels.data.cpu().numpy())
         loss = criterion(outputs, labels)
         loss.backward()
@@ -156,23 +177,24 @@ for epoch in range(args.epochs):
     counter.flush()
     net.eval()
 
-    for i, (inputs, labels) in enumerate(testloader):
+    for _, (inputs, labels) in enumerate(testloader):
         inputs, labels = Variable(inputs.cuda(async=True)), Variable(labels.cuda(async=True))
         outputs = net(inputs)
-        # accs.append(logit2acc(outputs, labels))  # probably a bad way to calculate accuracy
         counter.add(outputs.data.cpu().numpy(), labels.data.cpu().numpy())
-
 
     print(' -- Epoch %d time: %.4f loss: %.4f training acc: %.4f, validation accuracy: %.4f ; lr %.6f --' %
           (epoch, time() - t0, training_loss, train_acc, counter.acc(), lr))
 
     save_checkpoint({
         'epoch': epoch + 1,
-        'state_dict': net.state_dict(),
+        'state_dict': net.module.state_dict() if use_cuda else net.state_dict(),
         'test_accuracy': counter.acc(),
         'optimizer': optimizer.state_dict(),
         'net': net.module if use_cuda else net,
         'name': args.model,
+        # TODO: not flexible
+        'model_args': {'k': args.k},
+        'script_args': vars(args)
     }, prev_test_acc < counter.acc())
 
     with open('{}/log'.format(args.log_dir), 'a') as f:
