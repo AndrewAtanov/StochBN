@@ -27,7 +27,8 @@ from models.stochbn import _MyBatchNorm
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--model', '-m', help='Trained model')
-parser.add_argument('--n_inferences', '-n', type=int, nargs='+', help='List of number of batches for one object')
+parser.add_argument('--n_inferences', '-n', default=[1], type=int, nargs='+',
+                    help='List of number of batches for one object')
 parser.add_argument('--data', '-d', default='test', help='Either \'train\' or \'test\' -- data to fill batch')
 parser.add_argument('--acc', default='test', help='Either \'train\' or \'test\' -- to calculate accuracy')
 parser.add_argument('--log_dir', help='Directory for logging')
@@ -41,6 +42,7 @@ parser.set_defaults(augmentation=True)
 parser.add_argument('--permute', dest='permute', action='store_true')
 parser.add_argument('--no-permute', dest='permute', action='store_false')
 parser.set_defaults(permute=True)
+parser.add_argument('--test_mode', default='vanilla')
 args = parser.parse_args()
 args.script = os.path.basename(__file__)
 
@@ -109,14 +111,16 @@ if args.eval:
 acc_data = test_data if args.acc == 'test' else train_data
 acc_labels = test_labels if args.acc == 'test' else train_labels
 
+set_StochBN_test_mode(net, args.test_mode)
+
 for n_infer, BS in product(args.n_inferences, args.bs):
     start_time = time()
     counter = AccCounter()
 
     if args.data == 'test' or args.acc == 'train':
         ens = Ensemble()
-        logits = np.zeros([acc_data.shape[0], 10])
         for _ in range(n_infer):
+            logits = np.zeros([acc_data.shape[0], 10])
             if args.augmentation:
                 acc_data = np.array(list(map(lambda x: transform_train(x).numpy(),
                                              testset.test_data if args.acc == 'test' else trainset.train_data)))
@@ -133,9 +137,10 @@ for n_infer, BS in product(args.n_inferences, args.bs):
                 idxs = perm[i: i + BS]
                 inputs = Variable(torch.Tensor(acc_data[idxs]).cuda(async=True))
                 outputs = net(inputs)
-                logits[idxs] += outputs.cpu().data.numpy()
+                assert np.allclose(logits[idxs], 0.)
+                logits[idxs] = outputs.cpu().data.numpy()
 
-        ens.add_estimator(logits)
+            ens.add_estimator(logits)
 
         counter = AccCounter()
         counter.add(ens.get_proba(), acc_labels)

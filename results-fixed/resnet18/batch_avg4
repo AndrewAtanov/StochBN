@@ -1,0 +1,3 @@
+#{'acc': 'test', 'layers_train_mode': [], 'test_mode': 'vanilla', 'script': 'batch_avg.py', 'n_inferences': [1], 'seed': 42, 'augmentation': False, 'log_dir': 'StochBN/results-fixed/resnet18/', 'eval': True, 'bs': [200], 'model': 'resnet18/best_model', 'data': 'test', 'permute': True}
+n_infer,batch_size,acc
+1,200,0.9374
