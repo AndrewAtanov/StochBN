@@ -14,12 +14,14 @@ class _MyBatchNorm(nn.Module):
         self.affine = affine
         self.eps = eps
         self.momentum = momentum
+        self.stats_momentum = momentum
         if self.affine:
             self.weight = Parameter(torch.Tensor(num_features))
             self.bias = Parameter(torch.Tensor(num_features))
         else:
             self.register_parameter('weight', None)
             self.register_parameter('bias', None)
+
         self.register_buffer('running_mean', torch.zeros(num_features))
         self.register_buffer('running_var', torch.ones(num_features))
 
@@ -32,7 +34,7 @@ class _MyBatchNorm(nn.Module):
         self.mean_strategy = 'vanilla'
         self.var_strategy = 'vanilla'
         self.train_mode = 'vanilla'
-        self.test_mode = 'standart'
+        self.test_mode = 'vanilla'
         self.s = None
         self.sample_impl = 'straightforward'
 
@@ -42,11 +44,24 @@ class _MyBatchNorm(nn.Module):
         self.register_buffer('sum_m2', torch.zeros(num_features))
         self.register_buffer('sum_logvar', torch.zeros(num_features))
         self.register_buffer('sum_var', torch.zeros(num_features))
+        self.register_buffer('sum_var2', torch.zeros(num_features))
+
+        self.register_buffer('running_m', torch.zeros(num_features))
+        self.register_buffer('running_m2', torch.zeros(num_features))
+        self.register_buffer('running_logvar', torch.zeros(num_features))
+        self.register_buffer('running_logvar2', torch.zeros(num_features))
 
         self.register_buffer('mean_mean', torch.zeros(num_features))
         self.register_buffer('mean_var', torch.ones(num_features))
         self.register_buffer('var_shape', torch.zeros(num_features))
         self.register_buffer('var_scale', torch.zeros(num_features))
+
+        self.register_buffer('running_mean_mean', torch.zeros(num_features))
+        self.register_buffer('running_mean_var', torch.ones(num_features))
+        self.register_buffer('running_logvar_mean', torch.zeros(num_features))
+        self.register_buffer('running_logvar_var', torch.ones(num_features))
+        self.register_buffer('running_var_shape', torch.zeros(num_features))
+        self.register_buffer('running_var_scale', torch.zeros(num_features))
 
         self.reset_parameters()
 
@@ -70,6 +85,7 @@ class _MyBatchNorm(nn.Module):
 
         self.sum_logvar += torch.log(self.cur_var)
         self.sum_var += self.cur_var
+        self.sum_var2 += self.cur_var ** 2
 
         self.n_samples += 1
 
@@ -82,6 +98,30 @@ class _MyBatchNorm(nn.Module):
             self.s = s.cpu().numpy()
             self.var_shape.copy_((3 - s + torch.sqrt((s - 3) ** 2 + 24 * s)) / 12. / s)
             self.var_scale.copy_(self.sum_var / self.var_shape / self.n_samples)
+
+    def update_smoothed_stats(self):
+        self.running_m = (1 - self.stats_momentum) * self.running_m + self.stats_momentum * self.cur_mean
+        self.running_m2 = (1 - self.stats_momentum) * self.running_m2 + self.stats_momentum * (self.cur_mean ** 2)
+
+        self.running_logvar = (1 - self.stats_momentum) * self.running_logvar + self.stats_momentum * torch.log(self.cur_var)
+        self.running_logvar2 = (1 - self.stats_momentum) * self.running_logvar2 + self.stats_momentum * (torch.log(self.cur_var) ** 2)
+
+        self.running_mean_mean.copy_(self.running_m)
+        self.running_mean_var.copy_(self.running_m2 - (self.running_m ** 2))
+
+        self.running_logvar_mean.copy_(self.running_logvar)
+        self.running_logvar_var.copy_(self.running_logvar2 - (self.running_logvar ** 2))
+
+        self.running_mean.copy_(self.running_m)
+        self.running_var.copy_(torch.exp(self.running_logvar))
+        # self.running_var = (1 - self.stats_momentum) * self.running_var + self.stats_momentum * self.cur_var
+
+
+        # s = torch.log(self.running_var) - self.running_logvar
+        # # TODO: delete assert
+        # assert np.all(s.cpu().numpy() >= 0)
+        # self.running_var_shape.copy_((3 - s + torch.sqrt((s - 3) ** 2 + 24 * s)) / 12. / s)
+        # self.running_var_scale.copy_(self.running_var / self.running_var_shape)
 
     def flush_stats(self):
         self.sum_m.zero_()
@@ -116,6 +156,57 @@ class _MyBatchNorm(nn.Module):
                 return F.batch_norm(
                     input, self.running_mean, self.running_var, self.weight,
                     self.bias, False, self.momentum, self.eps)
+
+            elif self.train_mode == 'collect-stats':
+                res = F.batch_norm(input, self.cur_mean, self.cur_var,
+                                   self.weight, self.bias,
+                                   True, 1., self.eps)
+                self.update_smoothed_stats()
+                return res
+            elif self.train_mode == 'sample-stats':
+                F.batch_norm(
+                    input, self.cur_mean, self.cur_var, self.weight, self.bias,
+                    True, 1., self.eps)
+
+                sampled_var = torch.normal(self.running_logvar_mean.view(1, -1).expand(input.size(0),
+                                                                                       self.num_features),
+                                           torch.sqrt(self.running_logvar_var).view(1, -1).expand(input.size(0),
+                                                                                                  self.num_features),
+                                           ).view(input.size(0), self.num_features, 1, 1)
+                sampled_var = torch.exp(sampled_var)
+                sampled_mean = torch.normal(self.running_mean_mean.view(1, -1).expand(input.size(0), self.num_features),
+                                            torch.sqrt(self.running_mean_var).view(1, -1).expand(input.size(0), self.num_features),
+                                            ).view(input.size(0), self.num_features, 1, 1)
+
+                out = Variable(torch.zeros(input.size()))
+
+                if input.is_cuda:
+                    out = out.cuda()
+                    sampled_mean = sampled_mean.cuda()
+                    sampled_var = sampled_var.cuda()
+
+                out.data.copy_(input.data - sampled_mean.expand_as(input))
+                out.data.copy_(out.data / torch.sqrt(sampled_var + self.eps).expand_as(input))
+
+                self.update_smoothed_stats()
+                self.cur_mean.zero_()
+                self.cur_var.fill_(1.)
+                return F.batch_norm(out, self.cur_mean, self.cur_var,
+                                    self.weight, self.bias,
+                                    True, 0., 0)
+            elif self.train_mode == 'running-stats':
+                res = F.batch_norm(input,
+                                   self.running_m, torch.exp(self.running_logvar),
+                                   self.weight, self.bias,
+                                   True, 0., self.eps)
+                F.batch_norm(
+                    input, self.cur_mean, self.cur_var, self.weight, self.bias,
+                    True, 1., self.eps)
+
+                self.update_smoothed_stats()
+                return res
+            else:
+                raise NotImplementedError('{} training mode dont implemented!'.format(self.train_mode))
 
         if 'sample' in self.test_mode:
             if input.data.size()[0] > 1:
@@ -186,6 +277,36 @@ class _MyBatchNorm(nn.Module):
         #     return F.batch_norm(output, self.cur_mean, self.cur_var,
         #                         self.weight, self.bias, False,
         #                         self.momentum, 0)
+        if self.test_mode == 'random-v2':
+            sampled_var = torch.normal(self.running_logvar_mean.view(1, -1).expand(input.size(0),
+                                                                                   self.num_features),
+                                       torch.sqrt(self.running_logvar_var).view(1, -1).expand(input.size(0),
+                                                                                              self.num_features),
+                                       ).view(input.size(0), self.num_features, 1, 1)
+            sampled_var = torch.exp(sampled_var)
+            sampled_mean = torch.normal(self.running_mean_mean.view(1, -1).expand(input.size(0), self.num_features),
+                                        torch.sqrt(self.running_mean_var).view(1, -1).expand(input.size(0),
+                                                                                             self.num_features),
+                                        ).view(input.size(0), self.num_features, 1, 1)
+
+            out = Variable(torch.zeros(input.size()))
+
+            if input.is_cuda:
+                out = out.cuda()
+                sampled_mean = sampled_mean.cuda()
+                sampled_var = sampled_var.cuda()
+
+            out.data.copy_(input.data - sampled_mean.expand_as(input))
+            out.data.copy_(out.data / torch.sqrt(sampled_var + self.eps).expand_as(input))
+
+            self.cur_mean.zero_()
+            self.cur_var.fill_(1.)
+            return F.batch_norm(out, self.cur_mean, self.cur_var,
+                                self.weight, self.bias,
+                                True, 0., 0)
+
+        if self.test_mode != 'vanilla':
+            raise NotImplementedError('{} test mode not implemented!'.format(self.test_mode))
 
         out = Variable(torch.zeros(input.size()))
         running_means = self.running_mean.cpu().numpy()
