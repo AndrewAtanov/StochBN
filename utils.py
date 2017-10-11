@@ -10,7 +10,7 @@ import importlib
 import sys
 import pickle
 import torchvision
-
+import tensorboardX
 
 def uniquify(path, sep = ''):
     def name_sequence():
@@ -154,6 +154,28 @@ def load_optim(filename, print_info=False, n_classes=10):
         print('Net validation accuracy = {}'.format(chekpoint['test_accuracy']))
 
     return net
+
+
+def set_bn_mode(net, mode):
+    for m in net.modules():
+        if isinstance(m, _MyBatchNorm):
+            m.set_mode(mode)
+
+
+def set_bn_sample_weight(net, val):
+    for m in net.modules():
+        if isinstance(m, _MyBatchNorm):
+            m.sample_weight = val
+
+
+def to_np(x):
+    return x.data.cpu().numpy()
+
+
+def log_params_info(net, writer, step):
+    for name, param in net.named_parameters():
+        writer.add_histogram('{}/grad'.format(name), to_np(param.grad.norm()), step, bins='auto')
+        writer.add_histogram('{}'.format(name), to_np(param), step, bins='auto')
 
 
 class CIFAR(torchvision.datasets.CIFAR10):

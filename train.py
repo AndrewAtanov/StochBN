@@ -20,7 +20,7 @@ from torch.autograd import Variable
 import shutil
 from time import time
 import importlib
-
+from tensorboardX import SummaryWriter
 
 torch.cuda.manual_seed_all(42)
 torch.manual_seed(42)
@@ -33,7 +33,7 @@ parser.add_argument('--epochs', default=200, type=int, help='number of epochs')
 parser.add_argument('--bs', default=128, type=int, help='batch size')
 parser.add_argument('--decrease_from', default=100, type=int, help='Epoch to decrease lr linear to 0 from')
 parser.add_argument('--log_dir', help='Directory for logging')
-parser.add_argument('--sample_stats_from', type=int, default=None)
+parser.add_argument('--sample_stats_from', type=int, default=1)
 parser.add_argument('--start_tmode', type=int, default=None)
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
 parser.add_argument('--augmentation', dest='augmentation', action='store_true')
@@ -46,12 +46,18 @@ parser.add_argument('--decay', default=None, type=float,
 parser.add_argument('--finetune_bn', action='store_true')
 parser.add_argument('--var_strategy', default='vanilla')
 parser.add_argument('--mean_strategy', default='vanilla')
+parser.add_argument('--bn_mode', default='vanilla')
+parser.add_argument('--sample_w_init', type=float, default=0.)
+parser.add_argument('--sample_w_iter', type=int, default=50)
 args = parser.parse_args()
 args.script = os.path.basename(__file__)
 
 use_cuda = torch.cuda.is_available()
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
+
+# tensorbord writer
+writer = SummaryWriter(args.log_dir)
 
 # Data
 print('==> Preparing data..')
@@ -135,8 +141,13 @@ def lr_exponential(epoch):
     return args.lr * (args.decay ** np.maximum(0, epoch - args.decrease_from))
 
 
+def sample_weight_linear(epoch):
+    return 1 - max(0, ((1. - args.sample_w_init) * np.minimum((args.sample_stats_from - epoch) * 1. / args.sample_w_iter + 1, 1.)))
+
 prev_test_acc = 0
 counter = AccCounter()
+
+set_bn_mode(net, args.bn_mode)
 
 for epoch in range(args.epochs):
     counter.flush()
@@ -146,17 +157,19 @@ for epoch in range(args.epochs):
     adjust_learning_rate(optimizer, lr)
 
     net.train()
-    if args.training_mode == 'vanilla':
-        set_StochBN_train_mode(net, 'vanilla')
-    elif args.finetune_bn:
-        net.eval()
-    elif args.training_mode == 'sample-stats':
-        if args.sample_stats_from > (epoch + 1):
-            set_StochBN_train_mode(net, 'collect-stats')
-        else:
-            set_StochBN_train_mode(net, 'sample-stats')
-    elif args.training_mode == 'running-stats':
-        set_StochBN_train_mode(net, 'running-stats')
+    mean_strategy = args.mean_strategy
+    var_strategy = args.var_strategy
+
+    sample_w = sample_weight_linear(epoch + 1)
+    set_bn_sample_weight(net, sample_w)
+
+    if args.sample_stats_from > (epoch + 1):
+        if mean_strategy == 'sample':
+            mean_strategy = 'batch'
+        if var_strategy == 'sample':
+            var_strategy = 'batch'
+
+    set_MyBN_strategy(net, mean_strategy=mean_strategy, var_strategy=var_strategy)
 
     training_loss = 0
     for i, (inputs, labels) in enumerate(trainloader, 0):
@@ -174,17 +187,29 @@ for epoch in range(args.epochs):
         optimizer.step()
         training_loss += loss.cpu().data.numpy()[0]
 
+        if (i + 1) % 10 == 0:
+            log_params_info(net, writer, epoch + 1)
+
     train_acc = counter.acc()
     counter.flush()
+    test_loss = 0
+
     net.eval()
+    set_MyBN_strategy(net, var_strategy='running', mean_strategy='running')
 
     for _, (inputs, labels) in enumerate(testloader):
         inputs, labels = Variable(inputs.cuda(async=True)), Variable(labels.cuda(async=True))
         outputs = net(inputs)
+        loss = criterion(outputs, labels)
+        test_loss += to_np(loss)
         counter.add(outputs.data.cpu().numpy(), labels.data.cpu().numpy())
 
-    print(' -- Epoch %d time: %.4f loss: %.4f training acc: %.4f, validation accuracy: %.4f ; lr %.6f --' %
-          (epoch, time() - t0, training_loss, train_acc, counter.acc(), lr))
+    writer.add_scalar('log-loss/test', test_loss, epoch + 1)
+    writer.add_scalar('sample_weight', sample_w, epoch + 1)
+    writer.add_scalar('learning_rate', lr, epoch + 1)
+
+    print(' -- Epoch %d time: %.4f loss: %.4f training acc: %.4f, validation accuracy: %.4f ; lr %.6f ; sample weight %.2f --' %
+          (epoch, time() - t0, training_loss, train_acc, counter.acc(), lr, sample_w))
 
     save_checkpoint({
         'epoch': epoch + 1,
@@ -197,6 +222,12 @@ for epoch in range(args.epochs):
         'model_args': {'k': args.k},
         'script_args': vars(args)
     }, prev_test_acc < counter.acc())
+
+    writer.add_scalar('log-loss/train', np.log(training_loss), global_step=epoch)
+    writer.add_scalars('metrics/accuracy', {
+        'train': train_acc,
+        'test': counter.acc(),
+    }, global_step=epoch)
 
     with open('{}/log'.format(args.log_dir), 'a') as f:
         f.write('{},{},{},{}\n'.format(epoch, training_loss, train_acc, counter.acc()))
