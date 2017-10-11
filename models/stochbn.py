@@ -7,14 +7,16 @@ import numpy as np
 from torch.autograd import Variable
 import warnings
 
+
 class _MyBatchNorm(nn.Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, mode='vanilla'):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, mode=None):
         super(_MyBatchNorm, self).__init__()
         self.num_features = num_features
         self.affine = affine
         self.eps = eps
         self.momentum = momentum
         self.stats_momentum = momentum
+        self.sample_weight = 1.
         if self.affine:
             self.weight = Parameter(torch.Tensor(num_features))
             self.bias = Parameter(torch.Tensor(num_features))
@@ -32,14 +34,17 @@ class _MyBatchNorm(nn.Module):
         self.collect = False
         self.mode = 'vanilla'
         self.n_samples = 0
-        self.mean_strategy = 'vanilla'
-        self.var_strategy = 'vanilla'
+        self.mean_strategy = 'batch'
+        self.var_strategy = 'batch'
         self.train_mode = 'vanilla'
         self.test_mode = 'vanilla'
         self.s = None
         self.sample_impl = 'straightforward'
 
         self._sum_m = 0
+
+        self.register_buffer('zeros', torch.zeros(num_features))
+        self.register_buffer('ones', torch.ones(num_features))
 
         self.register_buffer('sum_m', torch.zeros(num_features))
         self.register_buffer('sum_m2', torch.zeros(num_features))
@@ -65,6 +70,12 @@ class _MyBatchNorm(nn.Module):
         self.register_buffer('running_var_scale', torch.zeros(num_features))
 
         self.reset_parameters()
+
+    def set_mode(self, mode):
+        if self.__global_mode is None:
+            self.__global_mode = mode
+        else:
+            raise AssertionError("Don't change type of BN layer!")
 
     def reset_parameters(self):
         self.running_mean.zero_()
@@ -133,18 +144,25 @@ class _MyBatchNorm(nn.Module):
 
         self.n_samples = 0
 
+    def forward_id(self, input):
+        """
+        Implement identity BN layer for easily testing models with no BN layers without changing models implementation.
+        :param input:
+        :return:
+        """
+        return input
+
     def forward_stochbn(self, input):
         F.batch_norm(
             input, self.cur_mean, self.cur_var, self.weight, self.bias,
             True, 1., self.eps)
 
         if self.mean_strategy == 'batch' and self.var_strategy == 'batch':
-            return F.batch_norm(
+            res = F.batch_norm(
                 input, self.running_mean, self.running_var, self.weight,
                 self.bias, True, 0., self.eps)
-
         elif self.var_strategy == 'running' and self.mean_strategy == 'running':
-            return F.batch_norm(
+            res = F.batch_norm(
                 input, self.running_mean, self.running_var, self.weight,
                 self.bias, False, 0., self.eps)
         else:
@@ -154,27 +172,31 @@ class _MyBatchNorm(nn.Module):
                                            torch.sqrt(self.running_logvar_var).view(1, -1).expand(input.size(0),
                                                                                                   self.num_features),
                                            ).view(input.size(0), self.num_features, 1, 1)
-                sampled_var = torch.exp(sampled_var)
+                sampled_var = torch.exp(sampled_var) * self.sample_weight
+                add = self.cur_var.view(1, -1).expand(input.size(0), self.num_features)
+                add = add.contiguous().view(input.size(0), self.num_features, 1, 1)
+                sampled_var += (1. - self.sample_weight) * add
             elif self.var_strategy == 'running':
                 sampled_var = self.running_var.view(1, -1).expand(input.size(0), self.num_features)
-                sampled_var = sampled_var.view(input.size(0), self.num_features, 1, 1)
+                sampled_var = sampled_var.contiguous().view(input.size(0), self.num_features, 1, 1)
             elif self.var_strategy == 'batch':
                 sampled_var = self.cur_var.view(1, -1).expand(input.size(0), self.num_features)
-                sampled_var = sampled_var.view(input.size(0), self.num_features, 1, 1)
+                sampled_var = sampled_var.contiguous().view(input.size(0), self.num_features, 1, 1)
             else:
                 raise NotImplementedError('Unknown var strategy: {}'.format(self.var_strategy))
 
             if self.mean_strategy == 'sample':
-                sampled_mean = torch.normal(self.running_mean_mean.view(1, -1).expand(input.size(0), self.num_features),
-                                            torch.sqrt(self.running_mean_var).view(1, -1).expand(input.size(0),
-                                                                                                 self.num_features),
+                m = self.running_mean_mean * self.sample_weight + (1. - self.sample_weight) * self.cur_mean
+                v = self.running_mean_var * (self.sample_weight ** 2)
+                sampled_mean = torch.normal(m.view(1, -1).expand(input.size(0), self.num_features),
+                                            torch.sqrt(v).view(1, -1).expand(input.size(0), self.num_features),
                                             ).view(input.size(0), self.num_features, 1, 1)
             elif self.mean_strategy == 'running':
                 sampled_mean = self.running_mean.view(1, -1).expand(input.size(0), self.num_features)
-                sampled_mean = sampled_mean.view(input.size(0), self.num_features, 1, 1)
+                sampled_mean = sampled_mean.contiguous().view(input.size(0), self.num_features, 1, 1)
             elif self.mean_strategy == 'batch':
                 sampled_mean = self.cur_mean.view(1, -1).expand(input.size(0), self.num_features)
-                sampled_mean = sampled_mean.view(input.size(0), self.num_features, 1, 1)
+                sampled_mean = sampled_mean.contiguous().view(input.size(0), self.num_features, 1, 1)
             else:
                 raise NotImplementedError('Unknown mean strategy: {}'.format(self.mean_strategy))
 
@@ -188,14 +210,14 @@ class _MyBatchNorm(nn.Module):
             out.data.copy_(input.data - sampled_mean.expand_as(input))
             out.data.copy_(out.data / torch.sqrt(sampled_var + self.eps).expand_as(input))
 
-            if self.training:
-                self.update_smoothed_stats()
+            res = F.batch_norm(input, self.zeros, self.ones,
+                               self.weight, self.bias,
+                               False, 0., 0)
 
-            self.cur_mean.zero_()
-            self.cur_var.fill_(1.)
-            return F.batch_norm(out, self.cur_mean, self.cur_var,
-                                self.weight, self.bias,
-                                False, 0., 0)
+        if self.training:
+            self.update_smoothed_stats()
+
+        return res
 
     def forward_vanilla(self, input):
         return F.batch_norm(
@@ -209,6 +231,8 @@ class _MyBatchNorm(nn.Module):
             return self.forward_stochbn(input)
         elif self.__global_mode == 'vanilla':
             return self.forward_vanilla(input)
+        elif self.__global_mode == 'no_bn':
+            return self.forward_id(input)
         else:
             warnings.warn('May be problem with this mode, because of refactoring!!!!', DeprecationWarning)
 
@@ -399,7 +423,7 @@ class _MyBatchNorm(nn.Module):
             means = self.mean_mean.cpu().numpy()
             means = np.tile(np.clip(means, running_means * 0.9, running_means * 1.1),
                             (input.size()[0], 1))[:, :, np.newaxis, np.newaxis]
-        elif self.mean_strategy == 'vanilla':
+        elif self.mean_strategy == 'running':
             means = np.tile(running_means, (input.size()[0], 1))[:,:,np.newaxis,np.newaxis]
         else:
             raise NotImplementedError('mean strategy {} not implemented'.format(self.mean_strategy))
@@ -420,7 +444,7 @@ class _MyBatchNorm(nn.Module):
         elif self.var_strategy == 'mean':
             vars = np.tile((self.sum_var / (self.n_samples * 1.)).cpu().numpy(),
                            (input.size()[0], 1))[:,:,np.newaxis,np.newaxis]
-        elif self.var_strategy == 'vanilla':
+        elif self.var_strategy == 'running':
             vars = np.tile(self.running_var.cpu().numpy(),
                            (input.size()[0], 1))[:, :, np.newaxis, np.newaxis]
         else:
