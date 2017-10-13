@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# from .module import Module
 from torch.nn.parameter import Parameter
 import numpy as np
 from torch.autograd import Variable
@@ -50,8 +49,11 @@ class _MyBatchNorm(nn.Module):
 
         self._sum_m = 0
 
-        self.register_buffer('vars', torch.zeros(num_features))
-        self.register_buffer('means', torch.ones(num_features))
+        self.register_buffer('means', torch.zeros(num_features))
+        self.register_buffer('vars', torch.ones(num_features))
+
+        self.register_buffer('zeros', torch.zeros(num_features))
+        self.register_buffer('ones', torch.ones(num_features))
 
         self.register_buffer('sum_m', torch.zeros(num_features))
         self.register_buffer('sum_m2', torch.zeros(num_features))
@@ -77,6 +79,9 @@ class _MyBatchNorm(nn.Module):
         self.register_buffer('running_var_scale', torch.zeros(num_features))
 
         self.reset_parameters()
+
+    def global_mode(self):
+        return self.__global_mode
 
     def set_mode(self, mode):
         if self.__global_mode is None:
@@ -160,42 +165,49 @@ class _MyBatchNorm(nn.Module):
         return input
 
     def forward_stochbn(self, input):
-        """
-        This mode is for any dimensionality
-        :param input:
-        :return:
-        """
-        self.cur_mean.copy_(mean_features(input).data)
-        self.cur_var.copy_(mean_features(input**2).data - self.cur_mean**2)
+        cur_mean = mean_features(input)
+        cur_var = mean_features(input**2) - cur_mean**2
+
+        means = None
+        vars = None
+
+        self.cur_var.copy_(cur_var.data)
+        self.cur_mean.copy_(cur_mean.data)
 
         if self.var_strategy == 'sample':
             eps = torch.randn(self.num_features).cuda()
-            sampled_var = torch.exp(eps * torch.sqrt(self.running_logvar_var) + self.running_logvar_mean)
-            self.vars.copy_(self.sample_weight * sampled_var + (1. - self.sample_weight) * self.cur_var)
-        elif self.var_strategy == 'running':
-            self.vars.copy_(self.running_var)
+            sampled_var = Variable(torch.exp(eps * torch.sqrt(self.running_logvar_var) + self.running_logvar_mean))
+            vars = cur_var * (1. - self.sample_weight) + self.sample_weight * sampled_var
+        elif self.var_strategy  == 'running-mean':
+            vars = Variable(torch.exp(self.running_logvar_mean + self.running_logvar_var / 2))
+        elif self.var_strategy in ['running', 'running-median']:
+            vars = Variable(self.running_var)
         elif self.var_strategy == 'batch':
-            self.vars.copy_(self.cur_var)
+            vars = cur_var
         else:
             raise NotImplementedError('Unknown var strategy: {}'.format(self.var_strategy))
 
         if self.mean_strategy == 'sample':
             eps = torch.randn(self.num_features).cuda()
-            sampled_mean = eps * torch.sqrt(self.running_mean_var) + self.running_mean_mean
-            self.means.copy_(self.sample_weight * sampled_mean + (1. - self.sample_weight) * self.cur_mean)
+            sampled_mean = Variable(eps * torch.sqrt(self.running_mean_var) + self.running_mean_mean)
+            means = cur_mean * (1. - self.sample_weight) + self.sample_weight * sampled_mean
         elif self.mean_strategy == 'running':
-            self.means.copy_(self.running_mean)
+            means = Variable(self.running_mean)
         elif self.mean_strategy == 'batch':
-            self.means.copy_(self.cur_mean)
+            means = cur_mean
         else:
             raise NotImplementedError('Unknown mean strategy: {}'.format(self.mean_strategy))
 
         if self.training:
             self.update_smoothed_stats()
 
-        return F.batch_norm(input, self.means, self.vars,
-                            self.weight, self.bias,
-                            False, 0., self.eps)
+        # TODO: implement for any dimensionality
+        out = input - means.view(1, -1, 1, 1)
+        out = out / torch.sqrt(vars + self.eps).view(1, -1, 1, 1)
+        out = out * self.weight.view(1, -1, 1, 1)
+        out = out + self.bias.view(1, -1, 1, 1)
+
+        return out
 
     def forward_vanilla(self, input):
         return F.batch_norm(
@@ -284,7 +296,7 @@ class _MyBatchNorm(nn.Module):
                 self.update_smoothed_stats()
                 self.cur_mean.zero_()
                 self.cur_var.fill_(1.)
-                return F.batch_norm(out, self.cur_mean, self.cur_var,
+                return F.batch_norm(out, self.zeros, self.ones,
                                     self.weight, self.bias,
                                     False, 0., 0)
 
