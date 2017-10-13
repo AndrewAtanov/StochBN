@@ -11,6 +11,9 @@ import sys
 import pickle
 import torchvision
 import tensorboardX
+from torchvision import transforms
+import PIL
+
 
 def uniquify(path, sep = ''):
     def name_sequence():
@@ -48,7 +51,6 @@ class Ensemble:
 
     def get_proba(self):
         return self.cum_proba / self.__n_estimators
-
 
 
 class AccCounter:
@@ -92,6 +94,10 @@ def get_model(model='ResNet18', k=1., **kwargs):
         return class_for_name('models', model)()
     elif 'VGG' in model:
         return VGG(vgg_name=model, k=k)
+    elif 'LeNet' in model:
+        return LeNet()
+    elif 'FC' in model:
+        return FC()
     else:
         raise NotImplementedError('unknown {} model'.format(model))
 
@@ -140,6 +146,22 @@ def load_model(filename, print_info=False):
     return net
 
 
+def pad(img, size, mode):
+    if isinstance(img, PIL.Image.Image):
+        img = np.array(img)
+    return np.pad(img, [(size, size), (size, size), (0, 0)], mode)
+
+
+class MyPad(object):
+    def __init__(self, size, mode='reflect'):
+        self.mode = mode
+        self.size = size
+        self.topil = transforms.ToPILImage()
+
+    def __call__(self, img):
+        return self.topil(pad(img, self.size, self.mode))
+
+
 def load_optim(filename, print_info=False, n_classes=10):
     use_cuda = torch.cuda.is_available()
     chekpoint = torch.load(filename)
@@ -174,8 +196,10 @@ def to_np(x):
 
 def log_params_info(net, writer, step):
     for name, param in net.named_parameters():
-        writer.add_histogram('{}/grad'.format(name), to_np(param.grad.norm()), step, bins='auto')
-        writer.add_histogram('{}'.format(name), to_np(param), step, bins='auto')
+        try:
+            writer.add_histogram('{}/grad'.format(name), to_np(param.grad), step, bins='auto')
+        except:
+            print('---- ', name)
 
 
 class CIFAR(torchvision.datasets.CIFAR10):
