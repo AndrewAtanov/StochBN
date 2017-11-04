@@ -43,6 +43,9 @@ parser.add_argument('--permute', dest='permute', action='store_true')
 parser.add_argument('--no-permute', dest='permute', action='store_false')
 parser.set_defaults(permute=True)
 parser.add_argument('--test_mode', default='vanilla')
+parser.add_argument('--var_strategy', default='vanilla')
+parser.add_argument('--mean_strategy', default='vanilla')
+parser.add_argument('--bn_mode', default='vanilla')
 args = parser.parse_args()
 args.script = os.path.basename(__file__)
 
@@ -112,6 +115,8 @@ acc_data = test_data if args.acc == 'test' else train_data
 acc_labels = test_labels if args.acc == 'test' else train_labels
 
 set_StochBN_test_mode(net, args.test_mode)
+set_bn_mode(net, args.bn_mode)
+set_MyBN_strategy(net, mean_strategy=args.mean_strategy, var_strategy=args.var_strategy)
 
 for n_infer, BS in product(args.n_inferences, args.bs):
     start_time = time()

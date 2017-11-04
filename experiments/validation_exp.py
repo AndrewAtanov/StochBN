@@ -30,13 +30,10 @@ def cifar_accuracy(net, mode='test', random_strategy=False, tries=20):
     loader = testloader if mode == 'test' else trainloader
     for i, (inputs, labels) in enumerate(loader):
         ens = Ensemble()
-
         inputs, labels = Variable(inputs.cuda()), Variable(labels.cuda())
-        # outputs = net(inputs).cpu().data.numpy()
         ens.add_estimator(net(inputs).cpu().data.numpy())
         k = 1
         while random_strategy and k < tries:
-            # outputs += net(inputs).cpu().data.numpy()
             ens.add_estimator(net(inputs).cpu().data.numpy())
             k += 1
 
