@@ -44,11 +44,15 @@ parser.add_argument('--k', '-k', default=1, type=float, help='Model size for VGG
 parser.add_argument('--decay', default=None, type=float,
                     help='Decay rate')
 parser.add_argument('--finetune_bn', action='store_true')
+parser.add_argument('--log_grads', action='store_true')
+parser.add_argument('--log_snr', action='store_true')
+parser.add_argument('--noiid', action='store_true')
 parser.add_argument('--var_strategy', default='vanilla')
 parser.add_argument('--mean_strategy', default='vanilla')
 parser.add_argument('--bn_mode', default='vanilla')
 parser.add_argument('--sample_w_init', type=float, default=0.)
-parser.add_argument('--sample_w_iter', type=int, default=50)
+parser.add_argument('--sample_w_iter', type=int, default=None)
+parser.add_argument('--data', default='cifar')
 args = parser.parse_args()
 args.script = os.path.basename(__file__)
 
@@ -61,8 +65,10 @@ writer = SummaryWriter(args.log_dir)
 
 # Data
 print('==> Preparing data..')
+
 transform_train = transforms.Compose([
-    transforms.RandomCrop(32, padding=4),
+    MyPad(4),
+    transforms.RandomCrop(32),
     transforms.RandomHorizontalFlip(),
     transforms.ToTensor(),
 ])
@@ -71,11 +77,25 @@ transform_test = transforms.Compose([
     transforms.ToTensor(),
 ])
 
-trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True,
-                                        transform=transform_train if args.augmentation else transform_test)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.bs, shuffle=True, num_workers=2)
+if args.data == 'cifar':
+    trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True,
+                                            transform=transform_train if args.augmentation else transform_test)
+    testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+elif args.data == 'mnist':
+    trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True,
+                                            transform=transform_train if args.augmentation else transform_test)
+    testset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform_test)
+else:
+    raise NotImplementedError
 
-testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+if args.noiid:
+    if args.data != 'cifar':
+        raise NotImplementedError
+    noiidsampler = CIFARNoIIDSampler(trainset)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.bs, sampler=noiidsampler, num_workers=2)
+else:
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.bs, shuffle=True, num_workers=2)
+
 testloader = torch.utils.data.DataLoader(testset, batch_size=200, shuffle=False, num_workers=2)
 
 classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
@@ -142,7 +162,7 @@ def lr_exponential(epoch):
 
 
 def sample_weight_linear(epoch):
-    return 1 - max(0, ((1. - args.sample_w_init) * np.minimum((args.sample_stats_from - epoch) * 1. / args.sample_w_iter + 1, 1.)))
+    return float(1. - max(0, ((1. - args.sample_w_init) * np.minimum((args.sample_stats_from - epoch) * 1. / args.sample_w_iter + 1, 1.))))
 
 prev_test_acc = 0
 counter = AccCounter()
@@ -160,7 +180,7 @@ for epoch in range(args.epochs):
     mean_strategy = args.mean_strategy
     var_strategy = args.var_strategy
 
-    sample_w = sample_weight_linear(epoch + 1)
+    sample_w = sample_weight_linear(epoch + 1) if args.sample_w_iter else args.sample_w_init
     set_bn_sample_weight(net, sample_w)
 
     if args.sample_stats_from > (epoch + 1):
@@ -172,6 +192,10 @@ for epoch in range(args.epochs):
     set_MyBN_strategy(net, mean_strategy=mean_strategy, var_strategy=var_strategy)
 
     training_loss = 0
+    grad_norms = {}
+    for name, param in net.named_parameters():
+        grad_norms[name] = []
+
     for i, (inputs, labels) in enumerate(trainloader, 0):
         # wrap data in Variable and put them on GPU
         inputs, labels = Variable(inputs.cuda(async=True)), Variable(labels.cuda(async=True))
@@ -187,8 +211,22 @@ for epoch in range(args.epochs):
         optimizer.step()
         training_loss += loss.cpu().data.numpy()[0]
 
-        if (i + 1) % 10 == 0:
-            log_params_info(net, writer, epoch + 1)
+        if args.log_grads:
+            for name, param in net.named_parameters():
+                norm = float((to_np(param.grad).reshape((-1,))**2).mean()**0.5)
+                grad_norms[name].append(norm)
+
+    if args.log_grads:
+        for name, norm in grad_norms.items():
+            writer.add_histogram('{}/grad-norm'.format(name), np.array(norm), bins='auto', global_step=epoch + 1)
+
+    if args.log_snr:
+        for i, bn in enumerate([m for m in net.modules() if isinstance(m, _MyBatchNorm)]):
+            eps = 1e-6
+            mean_snr = np.abs(bn.running_mean_mean.cpu().numpy()) / np.sqrt(bn.running_mean_var.cpu().numpy() + eps)
+            var_snr = 1 / np.sqrt(np.exp(bn.running_logvar_var.cpu().numpy()) - 1 + eps)
+            writer.add_histogram('BN-{}/mean_snr'.format(i + 1), mean_snr, epoch + 1, bins='auto')
+            writer.add_histogram('BN-{}/var_snr'.format(i + 1), var_snr, epoch + 1, bins='auto')
 
     train_acc = counter.acc()
     counter.flush()
@@ -204,7 +242,6 @@ for epoch in range(args.epochs):
         test_loss += to_np(loss)
         counter.add(outputs.data.cpu().numpy(), labels.data.cpu().numpy())
 
-    writer.add_scalar('log-loss/test', test_loss, epoch + 1)
     writer.add_scalar('sample_weight', sample_w, epoch + 1)
     writer.add_scalar('learning_rate', lr, epoch + 1)
 
@@ -223,7 +260,11 @@ for epoch in range(args.epochs):
         'script_args': vars(args)
     }, prev_test_acc < counter.acc())
 
-    writer.add_scalar('log-loss/train', np.log(training_loss), global_step=epoch)
+    writer.add_scalars('log-loss', {
+        'train': np.log(training_loss),
+        'test': np.log(test_loss)
+    }, global_step=epoch)
+
     writer.add_scalars('metrics/accuracy', {
         'train': train_acc,
         'test': counter.acc(),
