@@ -174,6 +174,18 @@ class _MyBatchNorm(nn.Module):
         self.cur_var.copy_(cur_var.data)
         self.cur_mean.copy_(cur_mean.data)
 
+        # running_m = Variable((1 - self.stats_momentum) * self.running_m) + self.stats_momentum * cur_mean
+        # running_m2 = Variable((1 - self.stats_momentum) * self.running_m2) + self.stats_momentum * (cur_mean ** 2)
+        #
+        # running_logvar = Variable((1 - self.stats_momentum) * self.running_logvar) + self.stats_momentum * torch.log(cur_var)
+        # running_logvar2 = Variable((1 - self.stats_momentum) * self.running_logvar2) + self.stats_momentum * (torch.log(cur_var) ** 2)
+        #
+        # running_mean_mean = running_m
+        # running_mean_var = running_m2 - (running_m ** 2)
+        #
+        # running_logvar_mean = running_logvar
+        # running_logvar_var = running_logvar2 - (running_logvar ** 2)
+
         if self.var_strategy == 'sample':
             eps = torch.randn(self.num_features).cuda()
             sampled_var = Variable(torch.exp(eps * torch.sqrt(self.running_logvar_var) + self.running_logvar_mean))
@@ -201,18 +213,36 @@ class _MyBatchNorm(nn.Module):
         if self.training:
             self.update_smoothed_stats()
 
-        # TODO: implement for any dimensionality
-        out = input - means.view(1, -1, 1, 1)
-        out = out / torch.sqrt(vars + self.eps).view(1, -1, 1, 1)
-        out = out * self.weight.view(1, -1, 1, 1)
-        out = out + self.bias.view(1, -1, 1, 1)
-
-        return out
+        return self.batch_norm(input, means, vars + self.eps)
 
     def forward_vanilla(self, input):
         return F.batch_norm(
             input, self.running_mean, self.running_var, self.weight, self.bias,
             self.training, self.momentum, self.eps)
+
+    def forward_smoothed_bn(self, input):
+        cur_mean = mean_features(input)
+        cur_var = mean_features(input**2) - cur_mean**2
+
+        self.cur_var.copy_(cur_var.data)
+        self.cur_mean.copy_(cur_mean.data)
+
+        means = Variable(self.sample_weight * self.running_mean) + (1 - self.sample_weight) * cur_mean
+        vars = Variable(self.sample_weight * self.running_var) + (1 - self.sample_weight) * cur_var
+
+        if self.training:
+            self.running_mean = (1 - self.momentum) * self.running_mean + self.momentum * self.cur_mean
+            self.running_var = (1 - self.momentum) * self.running_var + self.momentum * self.cur_var
+
+        return self.batch_norm(input, means, vars + self.eps)
+
+    def batch_norm(self, input, means, vars):
+        # TODO: implement for any dimensionality
+        out = input - means.view(-1, self.num_features, 1, 1)
+        out = out / torch.sqrt(vars.view(-1, self.num_features, 1, 1))
+        out = out * self.weight.view(1, self.num_features, 1, 1)
+        out = out + self.bias.view(1, self.num_features, 1, 1)
+        return out
 
     def forward(self, input):
         self._check_input_dim(input)
@@ -223,200 +253,11 @@ class _MyBatchNorm(nn.Module):
             return self.forward_vanilla(input)
         elif self.__global_mode == 'no_bn':
             return self.forward_id(input)
+        elif self.__global_mode == 'smoothed_bn':
+            return self.forward_smoothed_bn(input)
         else:
-            warnings.warn('May be problem with this mode, because of refactoring!!!!', DeprecationWarning)
-
-        if self.collect:
-            res = F.batch_norm(
-                input, self.cur_mean, self.cur_var, self.weight, self.bias,
-                True, 1., self.eps)
-            self.update_stats()
-
-            return res
-
-        if self.training:
-            if self.mean_strategy == 'batch' and self.var_strategy == 'batch':
-                return F.batch_norm(
-                    input, self.running_mean, self.running_var, self.weight,
-                    self.bias, True, self.momentum, self.eps)
-
-            elif self.var_strategy == 'running' and self.mean_strategy == 'running':
-                F.batch_norm(
-                    input, self.cur_mean, self.cur_var, self.weight, self.bias,
-                    True, 1., self.eps)
-
-                self.update_smoothed_stats()
-                return F.batch_norm(
-                    input, self.running_mean, self.running_var, self.weight,
-                    self.bias, False, 0., self.eps)
-            else:
-                F.batch_norm(
-                    input, self.cur_mean, self.cur_var, self.weight, self.bias,
-                    True, 1., self.eps)
-
-                if self.var_strategy == 'sample':
-                    sampled_var = torch.normal(self.running_logvar_mean.view(1, -1).expand(input.size(0),
-                                                                                           self.num_features),
-                                               torch.sqrt(self.running_logvar_var).view(1, -1).expand(input.size(0),
-                                                                                                      self.num_features),
-                                               ).view(input.size(0), self.num_features, 1, 1)
-                    sampled_var = torch.exp(sampled_var)
-                elif self.var_strategy == 'running':
-                    sampled_var = self.running_var.view(1, -1).expand(input.size(0), self.num_features)
-                    sampled_var = sampled_var.view(input.size(0), self.num_features, 1, 1)
-                elif self.var_strategy == 'batch':
-                    sampled_var = self.cur_var.view(1, -1).expand(input.size(0), self.num_features)
-                    sampled_var = sampled_var.view(input.size(0), self.num_features, 1, 1)
-                else:
-                    raise NotImplementedError('Unknown var strategy: {}'.format(self.var_strategy))
-
-                if self.mean_strategy == 'sample':
-                    sampled_mean = torch.normal(self.running_mean_mean.view(1, -1).expand(input.size(0), self.num_features),
-                                                torch.sqrt(self.running_mean_var).view(1, -1).expand(input.size(0), self.num_features),
-                                                ).view(input.size(0), self.num_features, 1, 1)
-                elif self.mean_strategy == 'running':
-                    sampled_mean = self.running_mean.view(1, -1).expand(input.size(0), self.num_features)
-                    sampled_mean = sampled_mean.view(input.size(0), self.num_features, 1, 1)
-                elif self.mean_strategy == 'batch':
-                    sampled_mean = self.cur_mean.view(1, -1).expand(input.size(0), self.num_features)
-                    sampled_mean = sampled_mean.view(input.size(0), self.num_features, 1, 1)
-                else:
-                    raise NotImplementedError('Unknown mean strategy: {}'.format(self.mean_strategy))
-
-                out = Variable(torch.zeros(input.size()))
-
-                if input.is_cuda:
-                    out = out.cuda()
-                    sampled_mean = sampled_mean.cuda()
-                    sampled_var = sampled_var.cuda()
-
-                out.data.copy_(input.data - sampled_mean.expand_as(input))
-                out.data.copy_(out.data / torch.sqrt(sampled_var + self.eps).expand_as(input))
-
-                self.update_smoothed_stats()
-                self.cur_mean.zero_()
-                self.cur_var.fill_(1.)
-                return F.batch_norm(out, self.zeros, self.ones,
-                                    self.weight, self.bias,
-                                    False, 0., 0)
-
-        if 'sample' in self.test_mode:
-            if input.data.size()[0] > 1:
-                return F.batch_norm(input, self.cur_mean, self.cur_var,
-                                    self.weight, self.bias,
-                                    True, self.momentum, self.eps)
-
-            is_cuda = self.running_mean.is_cuda
-            dims = [-1] + [1] * (len(input.data[0].size()) - 1)
-            # size = input.data[0].size()
-            bs = int(self.test_mode.split('-')[-1])
-            _pass = self.test_mode.split('-')[1] == 'pass'
-
-            h, w = input.data.size()[2:]
-
-            batch = torch.normal(self.running_mean.view(1, -1, 1, 1).expand(bs - 1, self.num_features, h, w),
-                                 torch.sqrt(self.running_var.view(1, -1, 1, 1).expand(bs - 1, self.num_features, h, w)))
-
-            if is_cuda:
-                batch = batch.cuda()
-
-            res = F.batch_norm(torch.cat([input, batch]),
-                                self.cur_mean, self.cur_var,
-                                self.weight, self.bias,
-                                True, self.momentum, self.eps)
-
-            return res if _pass else res[:1]
-
-        if self.test_mode == 'random-v2':
-            sampled_var = torch.normal(self.running_logvar_mean.view(1, -1).expand(input.size(0),
-                                                                                   self.num_features),
-                                       torch.sqrt(self.running_logvar_var).view(1, -1).expand(input.size(0),
-                                                                                              self.num_features),
-                                       ).view(input.size(0), self.num_features, 1, 1)
-            sampled_var = torch.exp(sampled_var)
-            sampled_mean = torch.normal(self.running_mean_mean.view(1, -1).expand(input.size(0), self.num_features),
-                                        torch.sqrt(self.running_mean_var).view(1, -1).expand(input.size(0),
-                                                                                             self.num_features),
-                                        ).view(input.size(0), self.num_features, 1, 1)
-
-            out = Variable(torch.zeros(input.size()))
-
-            if input.is_cuda:
-                out = out.cuda()
-                sampled_mean = sampled_mean.cuda()
-                sampled_var = sampled_var.cuda()
-
-            out.data.copy_(input.data - sampled_mean.expand_as(input))
-            out.data.copy_(out.data / torch.sqrt(sampled_var + self.eps).expand_as(input))
-
-            self.cur_mean.zero_()
-            self.cur_var.fill_(1.)
-            return F.batch_norm(out, self.cur_mean, self.cur_var,
-                                self.weight, self.bias,
-                                True, 0., 0)
-
-        if self.test_mode != 'vanilla':
-            raise NotImplementedError('{} test mode not implemented!'.format(self.test_mode))
-
-        out = Variable(torch.zeros(input.size()))
-        running_means = self.running_mean.cpu().numpy()
-
-        if self.mean_strategy == 'random':
-            means = np.random.normal(loc=self.mean_mean.cpu().numpy(),
-                                     scale=torch.sqrt(self.mean_var).cpu().numpy(),
-                                     size=(input.size()[0], self.num_features))
-            means = np.array([np.clip(m, running_means * 0.9, running_means * 1.1) for m in means])
-            means = means[:, :, np.newaxis, np.newaxis]
-        elif self.mean_strategy == 'mean':
-            means = self.mean_mean.cpu().numpy()
-            means = np.tile(np.clip(means, running_means * 0.9, running_means * 1.1),
-                            (input.size()[0], 1))[:, :, np.newaxis, np.newaxis]
-        elif self.mean_strategy == 'running':
-            means = np.tile(running_means, (input.size()[0], 1))[:,:,np.newaxis,np.newaxis]
-        else:
-            raise NotImplementedError('mean strategy {} not implemented'.format(self.mean_strategy))
-
-        if self.var_strategy == 'random':
-            cond = np.isnan(self.s) | (self.s < 1e-8)
-            shape = self.var_shape.cpu().numpy()
-            scale = self.var_scale.cpu().numpy()
-
-            shape[cond] = 1
-            scale[cond] = 1
-
-            val = np.random.gamma(shape, scale, size=(input.size()[0], self.num_features))
-
-            val[:, cond] = (self.sum_var / (self.n_samples * 1.)).cpu().numpy()[cond]
-            vars = val[:, :, np.newaxis, np.newaxis]
-
-        elif self.var_strategy == 'mean':
-            vars = np.tile((self.sum_var / (self.n_samples * 1.)).cpu().numpy(),
-                           (input.size()[0], 1))[:,:,np.newaxis,np.newaxis]
-        elif self.var_strategy == 'running':
-            vars = np.tile(self.running_var.cpu().numpy(),
-                           (input.size()[0], 1))[:, :, np.newaxis, np.newaxis]
-        else:
-            raise NotImplementedError
-
-        means = torch.Tensor(means)
-        vars = torch.Tensor(vars)
-        if self.running_mean.is_cuda:
-            out = out.cuda()
-            means = means.cuda()
-            vars = vars.cuda()
-
-        out.data.copy_(input.data - means.expand_as(input))
-        out.data.copy_(out.data / torch.sqrt(vars + self.eps).expand_as(input))
-        self.cur_mean.zero_()
-        self.cur_var.fill_(1)
-
-        try:
-            return F.batch_norm(
-                out, self.cur_mean, self.cur_var, self.weight, self.bias,
-                False, self.momentum, 0)
-        except:
-            print(self, self.cur_mean, self.cur_var)
-            raise
+            # warnings.warn('May be problem with this mode, because of refactoring!!!!', DeprecationWarning)
+            raise NotImplementedError('No such BN mode {}'.format(self.__global_mode))
 
     def __repr__(self):
         return ('{name}({num_features}, eps={eps}, momentum={momentum},'
