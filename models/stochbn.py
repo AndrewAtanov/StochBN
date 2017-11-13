@@ -37,6 +37,8 @@ class _MyBatchNorm(nn.Module):
         self.register_buffer('cur_var', torch.ones(num_features))
 
         self.__global_mode = mode
+        self.__update_policy = 'after'
+        self.__sample_policy = 'one'
         self.collect = False
         self.mode = 'vanilla'
         self.n_samples = 0
@@ -83,9 +85,11 @@ class _MyBatchNorm(nn.Module):
     def global_mode(self):
         return self.__global_mode
 
-    def set_mode(self, mode):
+    def set_mode_policy(self, mode, update_policy='after', sample_policy='one'):
         if self.__global_mode is None:
             self.__global_mode = mode
+            self.__update_policy = update_policy
+            self.__sample_policy = sample_policy
         else:
             raise AssertionError("Don't change type of BN layer!")
 
@@ -168,29 +172,41 @@ class _MyBatchNorm(nn.Module):
         cur_mean = mean_features(input)
         cur_var = mean_features(input**2) - cur_mean**2
 
-        means = None
-        vars = None
-
         self.cur_var.copy_(cur_var.data)
         self.cur_mean.copy_(cur_mean.data)
 
-        # running_m = Variable((1 - self.stats_momentum) * self.running_m) + self.stats_momentum * cur_mean
-        # running_m2 = Variable((1 - self.stats_momentum) * self.running_m2) + self.stats_momentum * (cur_mean ** 2)
-        #
-        # running_logvar = Variable((1 - self.stats_momentum) * self.running_logvar) + self.stats_momentum * torch.log(cur_var)
-        # running_logvar2 = Variable((1 - self.stats_momentum) * self.running_logvar2) + self.stats_momentum * (torch.log(cur_var) ** 2)
-        #
-        # running_mean_mean = running_m
-        # running_mean_var = running_m2 - (running_m ** 2)
-        #
-        # running_logvar_mean = running_logvar
-        # running_logvar_var = running_logvar2 - (running_logvar ** 2)
+        running_mean_mean = Variable(self.running_mean_mean, requires_grad=False)
+        running_mean_var = Variable(self.running_mean_var, requires_grad=False)
+
+        running_logvar_mean = Variable(self.running_logvar_mean, requires_grad=False)
+        running_logvar_var = Variable(self.running_logvar_var, requires_grad=False)
+
+        if self.__update_policy == 'before' and self.training:
+            running_m = Variable((1 - self.stats_momentum) * self.running_m) + self.stats_momentum * cur_mean
+            running_m2 = Variable((1 - self.stats_momentum) * self.running_m2) + self.stats_momentum * (cur_mean ** 2)
+
+            running_logvar = Variable((1 - self.stats_momentum) * self.running_logvar) + self.stats_momentum * torch.log(cur_var)
+            running_logvar2 = Variable((1 - self.stats_momentum) * self.running_logvar2) + self.stats_momentum * (torch.log(cur_var) ** 2)
+
+            running_mean_mean = running_m
+            running_mean_var = running_m2 - (running_m ** 2)
+
+            running_logvar_mean = running_logvar
+            running_logvar_var = running_logvar2 - (running_logvar ** 2)
 
         if self.var_strategy == 'sample':
-            eps = torch.randn(self.num_features).cuda()
-            sampled_var = Variable(torch.exp(eps * torch.sqrt(self.running_logvar_var) + self.running_logvar_mean))
-            vars = cur_var * (1. - self.sample_weight) + self.sample_weight * sampled_var
-        elif self.var_strategy  == 'running-mean':
+            if self.__sample_policy == 'one':
+                eps = Variable(torch.randn(self.num_features).cuda())
+                sampled_var = torch.exp(eps * torch.sqrt(running_logvar_var) + running_logvar_mean)
+                vars = cur_var * (1. - self.sample_weight) + self.sample_weight * sampled_var
+            elif self.__sample_policy == 'bs':
+                eps = Variable(torch.randn(input.size(0), self.num_features).cuda())
+                logvar = eps * torch.sqrt(running_logvar_var).view(1, -1) + running_logvar_mean.view(1, -1)
+                sampled_var = torch.exp(logvar)
+                vars = cur_var.view(1, self.num_features) * (1. - self.sample_weight) + self.sample_weight * sampled_var
+            else:
+                raise NotImplementedError
+        elif self.var_strategy == 'running-mean':
             vars = Variable(torch.exp(self.running_logvar_mean + self.running_logvar_var / 2))
         elif self.var_strategy in ['running', 'running-median']:
             vars = Variable(self.running_var)
@@ -200,9 +216,16 @@ class _MyBatchNorm(nn.Module):
             raise NotImplementedError('Unknown var strategy: {}'.format(self.var_strategy))
 
         if self.mean_strategy == 'sample':
-            eps = torch.randn(self.num_features).cuda()
-            sampled_mean = Variable(eps * torch.sqrt(self.running_mean_var) + self.running_mean_mean)
-            means = cur_mean * (1. - self.sample_weight) + self.sample_weight * sampled_mean
+            if self.__sample_policy == 'one':
+                eps = Variable(torch.randn(self.num_features).cuda())
+                sampled_mean = eps * torch.sqrt(running_mean_var) + running_mean_mean
+                means = cur_mean * (1. - self.sample_weight) + self.sample_weight * sampled_mean
+            elif self.__sample_policy == 'bs':
+                eps = Variable(torch.randn(input.size(0), self.num_features).cuda())
+                sampled_mean = eps * torch.sqrt(running_mean_var).view(1, -1) + running_mean_mean.view(1, -1)
+                means = cur_mean.view(1, -1) * (1. - self.sample_weight) + self.sample_weight * sampled_mean
+            else:
+                raise NotImplementedError
         elif self.mean_strategy == 'running':
             means = Variable(self.running_mean)
         elif self.mean_strategy == 'batch':

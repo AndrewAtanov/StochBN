@@ -17,7 +17,7 @@ from models import *
 from models.stochbn import _MyBatchNorm
 from torch.autograd import Variable
 
-import shutil
+import shutil, pickle
 from time import time
 import importlib
 from tensorboardX import SummaryWriter
@@ -41,14 +41,17 @@ parser.add_argument('--no-augmentation', dest='augmentation', action='store_fals
 parser.set_defaults(augmentation=True)
 parser.add_argument('--model', '-m', default='ResNet18', help='Model')
 parser.add_argument('--k', '-k', default=1, type=float, help='Model size for VGG')
-parser.add_argument('--decay', default=None, type=float,
-                    help='Decay rate')
+parser.add_argument('--dropout', type=float, default=None)
+parser.add_argument('--weight_decay', type=float, default=0.)
+parser.add_argument('--decay', default=None, type=float, help='Decay rate')
 parser.add_argument('--finetune_bn', action='store_true')
 parser.add_argument('--log_grads', action='store_true')
 parser.add_argument('--log_snr', action='store_true')
 parser.add_argument('--noiid', action='store_true')
 parser.add_argument('--var_strategy', default='vanilla')
 parser.add_argument('--mean_strategy', default='vanilla')
+parser.add_argument('--sample_policy', default='one')
+parser.add_argument('--update_policy', default='after')
 parser.add_argument('--bn_mode', default='vanilla')
 parser.add_argument('--sample_w_init', type=float, default=0.)
 parser.add_argument('--sample_w_iter', type=int, default=None)
@@ -62,6 +65,7 @@ start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
 # tensorbord writer
 writer = SummaryWriter(args.log_dir)
+NCLASSES = 10
 
 # Data
 print('==> Preparing data..')
@@ -83,8 +87,14 @@ if args.data == 'cifar':
     testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
 elif args.data == 'mnist':
     trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True,
-                                            transform=transform_train if args.augmentation else transform_test)
+                                          transform=transform_train if args.augmentation else transform_test)
     testset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform_test)
+elif args.data == 'cifar5':
+    NCLASSES = 5
+    CIFAR5_CLASSES = [0, 1, 2, 3, 4]
+    trainset = CIFAR(root='./data', train=True, download=True,
+                     transform=transform_train if args.augmentation else transform_test, classes=CIFAR5_CLASSES)
+    testset = CIFAR(root='./data', train=False, download=True, transform=transform_test, classes=CIFAR5_CLASSES)
 else:
     raise NotImplementedError
 
@@ -111,7 +121,7 @@ if args.resume:
     print('Loaded model test accuracy: {}'.format(best_acc))
 else:
     print('==> Building model..')
-    net = get_model(**vars(args))
+    net = get_model(n_classes=NCLASSES, **vars(args))
 
 
 if use_cuda:
@@ -129,7 +139,7 @@ else:
     params = net.parameters()
 
 criterion = nn.CrossEntropyLoss().cuda()
-optimizer = optim.Adam(params, lr=args.lr)
+optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.weight_decay)
 
 # TODO: manage optimizer state
 if args.resume and not args.finetune_bn:
@@ -164,10 +174,15 @@ def lr_exponential(epoch):
 def sample_weight_linear(epoch):
     return float(1. - max(0, ((1. - args.sample_w_init) * np.minimum((args.sample_stats_from - epoch) * 1. / args.sample_w_iter + 1, 1.))))
 
-prev_test_acc = 0
+best_test_acc = 0
 counter = AccCounter()
 
-set_bn_mode(net, args.bn_mode)
+set_bn_mode(net, args.bn_mode,
+            update_policy=args.update_policy,
+            sample_policy=args.sample_policy)
+
+model_args = vars(args)
+model_args['n_classes'] = NCLASSES
 
 for epoch in range(args.epochs):
     counter.flush()
@@ -256,23 +271,26 @@ for epoch in range(args.epochs):
         'net': net.module if use_cuda else net,
         'name': args.model,
         # TODO: not flexible
-        'model_args': {'k': args.k},
+        'model_args': model_args,
         'script_args': vars(args)
-    }, prev_test_acc < counter.acc())
+    }, best_test_acc < counter.acc())
 
     writer.add_scalars('log-loss', {
-        'train': np.log(training_loss),
-        'test': np.log(test_loss)
+        'train': float(np.log(training_loss)),
+        'test': float(np.log(test_loss))
     }, global_step=epoch)
 
     writer.add_scalars('metrics/accuracy', {
-        'train': train_acc,
-        'test': counter.acc(),
+        'train': float(train_acc),
+        'test': float(counter.acc()),
     }, global_step=epoch)
+
+    writer.export_scalars_to_json(os.path.join(args.log_dir, 'all_scalars.json'))
 
     with open('{}/log'.format(args.log_dir), 'a') as f:
         f.write('{},{},{},{}\n'.format(epoch, training_loss, train_acc, counter.acc()))
 
-    prev_test_acc = counter.acc()
+    if best_test_acc < counter.acc():
+        best_test_acc = counter.acc()
 
 print('Finish Training')

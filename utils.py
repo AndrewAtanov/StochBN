@@ -1,11 +1,11 @@
 import numpy as np
-from models.stochbn import _MyBatchNorm
 import tempfile
 import itertools as IT
 import os
 from torch.nn.parallel import DataParallel
 import torch
 from models import *
+from models.stochbn import _MyBatchNorm
 import importlib
 import sys
 import pickle
@@ -89,17 +89,67 @@ def set_StochBN_train_mode(net, mode):
             m.train_mode = mode
 
 
-def get_model(model='ResNet18', k=1., **kwargs):
+def get_model(model='ResNet18', **kwargs):
     if 'ResNet' in model:
         return class_for_name('models', model)()
     elif 'VGG' in model:
-        return VGG(vgg_name=model, k=k)
+        return VGG(vgg_name=model, k=kwargs['k'], dropout=kwargs.get('dropout', None),
+                   n_classes=kwargs.get('n_classes', None))
     elif 'LeNet' in model:
         return LeNet()
     elif 'FC' in model:
         return FC()
     else:
         raise NotImplementedError('unknown {} model'.format(model))
+
+
+def get_dataloader(data='cifar', bs=128, augmentation=True, noiid=False):
+    transform_train = transforms.Compose([
+        MyPad(4),
+        transforms.RandomCrop(32),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+    ])
+
+    transform_test = transforms.Compose([
+        transforms.ToTensor(),
+    ])
+
+    if data == 'cifar':
+        trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True,
+                                                transform=transform_train if augmentation else transform_test)
+        testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+    elif data == 'SVHN':
+        trainset = torchvision.datasets.SVHN(root='./data', split='train', download=True,
+                                             transform=transform_train if augmentation else transform_test)
+        testset = torchvision.datasets.SVHN(root='./data', split='test', download=True, transform=transform_test)
+    elif data == 'mnist':
+        trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform_test)
+        testset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform_test)
+    elif data == 'cifar5':
+        CIFAR5_CLASSES = [0, 1, 2, 3, 4]
+        trainset = CIFAR(root='./data', train=True, download=True,
+                         transform=transform_train if augmentation else transform_test, classes=CIFAR5_CLASSES)
+        testset = CIFAR(root='./data', train=False, download=True, transform=transform_test, classes=CIFAR5_CLASSES)
+    elif data == 'cifar5-rest':
+        CIFAR5_CLASSES = [5, 6, 7, 8, 9]
+        trainset = CIFAR(root='./data', train=True, download=True,
+                         transform=transform_train if augmentation else transform_test, classes=CIFAR5_CLASSES)
+        testset = CIFAR(root='./data', train=False, download=True, transform=transform_test, classes=CIFAR5_CLASSES)
+    else:
+        raise NotImplementedError
+
+    if noiid:
+        if data != 'cifar':
+            raise NotImplementedError
+        noiidsampler = CIFARNoIIDSampler(trainset)
+        trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, sampler=noiidsampler, num_workers=2)
+    else:
+        trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, shuffle=True, num_workers=2)
+
+    testloader = torch.utils.data.DataLoader(testset, batch_size=200, shuffle=False, num_workers=2)
+
+    return trainloader, testloader
 
 
 def class_for_name(module_name, class_name):
@@ -135,7 +185,8 @@ def load_model(filename, print_info=False):
     use_cuda = torch.cuda.is_available()
     chekpoint = torch.load(filename)
     # TODO: add net kwargs
-    net = get_model(chekpoint['name'], **chekpoint.get('model_args', {}))
+    # net = get_model(chekpoint['name'], **chekpoint.get('model_args', {}))
+    net = get_model(**chekpoint.get('model_args', {}))
     net.load_state_dict(manage_state(net, chekpoint['state_dict']))
     if use_cuda:
         net = DataParallel(net, device_ids=range(torch.cuda.device_count()))
@@ -178,10 +229,10 @@ def load_optim(filename, print_info=False, n_classes=10):
     return net
 
 
-def set_bn_mode(net, mode):
+def set_bn_mode(net, mode, update_policy='after', sample_policy='one'):
     for m in net.modules():
         if isinstance(m, _MyBatchNorm):
-            m.set_mode(mode)
+            m.set_mode_policy(mode, update_policy=update_policy, sample_policy=sample_policy)
 
 
 def set_bn_sample_weight(net, val):
@@ -200,6 +251,19 @@ def log_params_info(net, writer, step):
             writer.add_histogram('{}/grad'.format(name), to_np(param.grad), step, bins='auto')
         except:
             print('---- ', name)
+
+
+class CIFARNoIIDSampler(object):
+    def __init__(self, data_source):
+        self.data_source = data_source
+
+    def __iter__(self):
+        idxs = np.array(list(range(len(self.data_source))))
+        idxs = idxs[np.argsort(self.data_source.train_labels)]
+        return iter(idxs)
+
+    def __len__(self):
+        return len(self.data_source)
 
 
 class CIFAR(torchvision.datasets.CIFAR10):
@@ -283,4 +347,3 @@ class CIFAR(torchvision.datasets.CIFAR10):
 
             self.test_data = self.test_data.reshape((10000, 3, 32, 32))[mask]
             self.test_data = self.test_data.transpose((0, 2, 3, 1))  # convert to HWC
-
