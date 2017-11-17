@@ -60,6 +60,8 @@ print('==> Read model ...')
 
 net = load_model(args.model, print_info=True)
 
+model_args = torch.load(args.model)['script_args']
+
 print('==> Preparing data ...')
 
 transform_test = transforms.Compose([
@@ -74,7 +76,7 @@ transform_train = transforms.Compose([
     transforms.ToTensor(),
 ])
 
-testset = torchvision.datasets.CIFAR10(root='./data', train=False,
+testset = torchvision.datasets.CIFAR10(root='/home/andrew/StochBN/data', train=False,
                                        download=True)
 test_data = testset.test_data.astype(float).transpose((0, 3, 1, 2))
 test_labels = np.array(testset.test_labels)
@@ -83,7 +85,7 @@ testloader = torch.utils.data.DataLoader(testset,
                                          shuffle=False, num_workers=2)
 
 
-trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
+trainset = torchvision.datasets.CIFAR10(root='/home/andrew/StochBN/data', train=True,
                                         download=True)
 train_data = trainset.train_data.astype(float).transpose((0, 3, 1, 2))
 train_labels = trainset.train_labels
@@ -114,8 +116,8 @@ if args.eval:
 acc_data = test_data if args.acc == 'test' else train_data
 acc_labels = test_labels if args.acc == 'test' else train_labels
 
-set_StochBN_test_mode(net, args.test_mode)
-set_bn_mode(net, args.bn_mode)
+set_bn_mode(net, model_args['bn_mode'],
+            update_policy=model_args['update_policy'], sample_policy=model_args['sample_policy'])
 set_MyBN_strategy(net, mean_strategy=args.mean_strategy, var_strategy=args.var_strategy)
 
 for n_infer, BS in product(args.n_inferences, args.bs):

@@ -94,11 +94,13 @@ def get_model(model='ResNet18', **kwargs):
         return class_for_name('models', model)()
     elif 'VGG' in model:
         return VGG(vgg_name=model, k=kwargs['k'], dropout=kwargs.get('dropout', None),
-                   n_classes=kwargs.get('n_classes', None))
-    elif 'LeNet' in model:
+                   n_classes=kwargs.get('n_classes', 10))
+    elif 'LeNet' == model:
         return LeNet()
-    elif 'FC' in model:
+    elif 'FC' == model:
         return FC()
+    elif 'LeNetCifar' == model:
+        return LeNetCifar(n_classes=kwargs.get('n_classes', None), dropout=kwargs.get('dropout', None))
     else:
         raise NotImplementedError('unknown {} model'.format(model))
 
@@ -170,6 +172,37 @@ def make_description(args):
     return '{}'.format(vars(args))
 
 
+def test_batch_avg(net, data, labels, n_tries=1, seed=42):
+    np.random.seed(42)
+
+    ens = Ensemble()
+    for _ in range(n_infer):
+        logits = np.zeros([acc_data.shape[0], 10])
+        if args.augmentation:
+            acc_data = np.array(list(map(lambda x: transform_train(x).numpy(),
+                                         testset.test_data if args.acc == 'test' else trainset.train_data)))
+        else:
+            acc_data = np.array(list(map(lambda x: transform_test(x).numpy(),
+                                         testset.test_data if args.acc == 'test' else trainset.train_data)))
+
+        if args.permute:
+            perm = np.random.permutation(np.arange(acc_data.shape[0]))
+        else:
+            perm = np.arange(acc_data.shape[0])
+
+        for i in range(0, len(perm), BS):
+            idxs = perm[i: i + BS]
+            inputs = Variable(torch.Tensor(acc_data[idxs]).cuda(async=True))
+            outputs = net(inputs)
+            assert np.allclose(logits[idxs], 0.)
+            logits[idxs] = outputs.cpu().data.numpy()
+
+        ens.add_estimator(logits)
+
+    counter = AccCounter()
+    counter.add(ens.get_proba(), acc_labels)
+
+
 def manage_state(net, ckpt_state):
     net_state = net.state_dict()
     for name, _ in net_state.items():
@@ -186,7 +219,7 @@ def load_model(filename, print_info=False):
     chekpoint = torch.load(filename)
     # TODO: add net kwargs
     # net = get_model(chekpoint['name'], **chekpoint.get('model_args', {}))
-    net = get_model(**chekpoint.get('model_args', {}))
+    net = get_model(**chekpoint.get('script_args', {}))
     net.load_state_dict(manage_state(net, chekpoint['state_dict']))
     if use_cuda:
         net = DataParallel(net, device_ids=range(torch.cuda.device_count()))

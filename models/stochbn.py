@@ -250,8 +250,15 @@ class _MyBatchNorm(nn.Module):
         self.cur_var.copy_(cur_var.data)
         self.cur_mean.copy_(cur_mean.data)
 
-        means = Variable(self.sample_weight * self.running_mean) + (1 - self.sample_weight) * cur_mean
-        vars = Variable(self.sample_weight * self.running_var) + (1 - self.sample_weight) * cur_var
+        if np.isclose(self.sample_weight, 1.):
+            means = Variable(self.running_mean, requires_grad=False)
+            vars = Variable(self.running_var, requires_grad=False)
+        elif np.isclose(self.sample_weight, 0.):
+            means = cur_mean
+            vars = cur_var
+        else:
+            means = Variable(self.sample_weight * self.running_mean, requires_grad=False) + (1 - self.sample_weight) * cur_mean
+            vars = Variable(self.sample_weight * self.running_var, requires_grad=False) + (1 - self.sample_weight) * cur_var
 
         if self.training:
             self.running_mean = (1 - self.momentum) * self.running_mean + self.momentum * self.cur_mean
@@ -295,6 +302,14 @@ class MyBatchNorm1d(_MyBatchNorm):
                              .format(input.dim()))
         super(MyBatchNorm1d, self)._check_input_dim(input)
 
+    def batch_norm(self, input, means, vars):
+        # TODO: implement for any dimensionality
+        out = input - means.view(-1, self.num_features)
+        out = out / torch.sqrt(vars.view(-1, self.num_features))
+        out = out * self.weight.view(1, self.num_features)
+        out = out + self.bias.view(1, self.num_features)
+        return out
+
 
 class MyBatchNorm2d(_MyBatchNorm):
     def _check_input_dim(self, input):
@@ -302,6 +317,14 @@ class MyBatchNorm2d(_MyBatchNorm):
             raise ValueError('expected 4D input (got {}D input)'
                              .format(input.dim()))
         super(MyBatchNorm2d, self)._check_input_dim(input)
+
+    def batch_norm(self, input, means, vars):
+        # TODO: implement for any dimensionality
+        out = input - means.view(-1, self.num_features, 1, 1)
+        out = out / torch.sqrt(vars.view(-1, self.num_features, 1, 1))
+        out = out * self.weight.view(1, self.num_features, 1, 1)
+        out = out + self.bias.view(1, self.num_features, 1, 1)
+        return out
 
 
 class MyBatchNorm3d(_MyBatchNorm):

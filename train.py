@@ -157,6 +157,7 @@ def save_checkpoint(state, is_best):
     if is_best:
         shutil.copyfile('{}/model'.format(args.log_dir), '{}/best_model'.format(args.log_dir))
 
+
 def adjust_learning_rate(optimizer, lr):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
     for param_group in optimizer.param_groups:
@@ -183,6 +184,8 @@ set_bn_mode(net, args.bn_mode,
 
 model_args = vars(args)
 model_args['n_classes'] = NCLASSES
+
+print(net)
 
 for epoch in range(args.epochs):
     counter.flush()
@@ -260,7 +263,7 @@ for epoch in range(args.epochs):
     writer.add_scalar('sample_weight', sample_w, epoch + 1)
     writer.add_scalar('learning_rate', lr, epoch + 1)
 
-    print(' -- Epoch %d time: %.4f loss: %.4f training acc: %.4f, validation accuracy: %.4f ; lr %.6f ; sample weight %.2f --' %
+    print(' -- Epoch %d | time: %.4f | loss: %.4f | training acc: %.4f validation accuracy: %.4f | lr %.6f | sample weight %.2f --' %
           (epoch, time() - t0, training_loss, train_acc, counter.acc(), lr, sample_w))
 
     save_checkpoint({
