@@ -53,6 +53,22 @@ class Ensemble:
         return self.cum_proba / self.__n_estimators
 
 
+def predict_proba(dataloader, net, ensemble=1, n_classes=10):
+    proba = np.zeros((len(dataloader.dataset), n_classes))
+    labels = []
+    p = 0
+    for img, label in dataloader:
+        ens = Ensemble()
+        img = Variable(img).cuda()
+        for _ in range(ensemble):
+            pred = net(img).data.cpu().numpy()
+            ens.add_estimator(pred)
+        proba[p: p + pred.shape[0]] = ens.get_proba()
+        p += pred.shape[0]
+        labels += label.tolist()
+    return proba, np.array(labels)
+
+
 class AccCounter:
     def __init__(self):
         self.__n_objects = 0
@@ -268,6 +284,12 @@ def set_bn_mode(net, mode, update_policy='after', sample_policy='one'):
             m.set_mode_policy(mode, update_policy=update_policy, sample_policy=sample_policy)
 
 
+def set_sample_policy(net, sample_policy='one'):
+    for m in net.modules():
+        if isinstance(m, _MyBatchNorm):
+            m.set_sample_policy(sample_policy=sample_policy)
+
+
 def set_bn_sample_weight(net, val):
     for m in net.modules():
         if isinstance(m, _MyBatchNorm):
@@ -276,6 +298,12 @@ def set_bn_sample_weight(net, val):
 
 def to_np(x):
     return x.data.cpu().numpy()
+
+
+def entropy(p):
+    eps = 1e-8
+    assert np.all(p >= 0)
+    return np.apply_along_axis(lambda x: -np.sum(x[x > eps] * np.log(x[x > eps])), 1, p)
 
 
 def log_params_info(net, writer, step):

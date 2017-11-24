@@ -93,6 +93,9 @@ class _MyBatchNorm(nn.Module):
         else:
             raise AssertionError("Don't change type of BN layer!")
 
+    def set_sample_policy(self, sample_policy='one'):
+        self.__sample_policy = sample_policy
+
     def reset_parameters(self):
         self.running_mean.zero_()
         self.running_var.fill_(1)
@@ -142,14 +145,6 @@ class _MyBatchNorm(nn.Module):
 
         self.running_mean.copy_(self.running_m)
         self.running_var.copy_(torch.exp(self.running_logvar))
-        # self.running_var = (1 - self.stats_momentum) * self.running_var + self.stats_momentum * self.cur_var
-
-
-        # s = torch.log(self.running_var) - self.running_logvar
-        # # TODO: delete assert
-        # assert np.all(s.cpu().numpy() >= 0)
-        # self.running_var_shape.copy_((3 - s + torch.sqrt((s - 3) ** 2 + 24 * s)) / 12. / s)
-        # self.running_var_scale.copy_(self.running_var / self.running_var_shape)
 
     def flush_stats(self):
         self.sum_m.zero_()

@@ -41,7 +41,7 @@ parser.add_argument('--no-augmentation', dest='augmentation', action='store_fals
 parser.set_defaults(augmentation=True)
 parser.add_argument('--model', '-m', default='ResNet18', help='Model')
 parser.add_argument('--k', '-k', default=1, type=float, help='Model size for VGG')
-parser.add_argument('--dropout', type=float, default=None)
+parser.add_argument('--dropout', type=float, nargs='+', default=None)
 parser.add_argument('--weight_decay', type=float, default=0.)
 parser.add_argument('--decay', default=None, type=float, help='Decay rate')
 parser.add_argument('--finetune_bn', action='store_true')
@@ -175,6 +175,7 @@ def lr_exponential(epoch):
 def sample_weight_linear(epoch):
     return float(1. - max(0, ((1. - args.sample_w_init) * np.minimum((args.sample_stats_from - epoch) * 1. / args.sample_w_iter + 1, 1.))))
 
+
 best_test_acc = 0
 counter = AccCounter()
 
@@ -227,7 +228,7 @@ for epoch in range(args.epochs):
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
-        training_loss += loss.cpu().data.numpy()[0]
+        training_loss += loss.cpu().data.numpy()[0] * float(args.bs)
 
         if args.log_grads:
             for name, param in net.named_parameters():
@@ -257,7 +258,7 @@ for epoch in range(args.epochs):
         inputs, labels = Variable(inputs.cuda(async=True)), Variable(labels.cuda(async=True))
         outputs = net(inputs)
         loss = criterion(outputs, labels)
-        test_loss += to_np(loss)
+        test_loss += to_np(loss) * float(args.bs)
         counter.add(outputs.data.cpu().numpy(), labels.data.cpu().numpy())
 
     writer.add_scalar('sample_weight', sample_w, epoch + 1)
@@ -271,22 +272,18 @@ for epoch in range(args.epochs):
         'state_dict': net.module.state_dict() if use_cuda else net.state_dict(),
         'test_accuracy': counter.acc(),
         'optimizer': optimizer.state_dict(),
-        'net': net.module if use_cuda else net,
+        # 'net': net.module if use_cuda else net,
         'name': args.model,
         # TODO: not flexible
         'model_args': model_args,
         'script_args': vars(args)
     }, best_test_acc < counter.acc())
 
-    writer.add_scalars('log-loss', {
-        'train': float(np.log(training_loss)),
-        'test': float(np.log(test_loss))
-    }, global_step=epoch)
+    writer.add_scalar('log-loss/train', float(np.log(training_loss)), global_step=epoch)
+    writer.add_scalar('log-loss/test', float(np.log(test_loss)), global_step=epoch)
 
-    writer.add_scalars('metrics/accuracy', {
-        'train': float(train_acc),
-        'test': float(counter.acc()),
-    }, global_step=epoch)
+    writer.add_scalar('accuracy/train', float(train_acc), global_step=epoch)
+    writer.add_scalar('accuracy/test', float(counter.acc()), global_step=epoch)
 
     writer.export_scalars_to_json(os.path.join(args.log_dir, 'all_scalars.json'))
 
