@@ -21,7 +21,7 @@ class VGG(nn.Module):
 
         self.features = self._make_layers(cfg[vgg_name], k)
         if self.use_dropout:
-            self.dropout = nn.Dropout(0.5)
+            self.dropout = nn.Dropout(self.dropout_rate[0])
         self.classifier = nn.Linear(int(512 * k), n_classes)
 
     def forward(self, x):
@@ -44,7 +44,7 @@ class VGG(nn.Module):
                            MyBatchNorm2d(x),
                            nn.ReLU(inplace=True)]
                 if self.use_dropout and config[i + 1] != 'M':
-                    layers += [nn.Dropout(0.4)]
+                    layers += [nn.Dropout(self.dropout_rate[1])]
                 in_channels = x
         layers += [nn.AvgPool2d(kernel_size=1, stride=1)]
         return nn.Sequential(*layers)
