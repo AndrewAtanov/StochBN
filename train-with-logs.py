@@ -6,6 +6,8 @@ import torch.optim as optim
 import torch.backends.cudnn as cudnn
 from utils import *
 
+import numpy as np
+
 import torchvision
 import torchvision.transforms as transforms
 from torch.nn.parallel import DataParallel
@@ -21,11 +23,6 @@ import shutil, pickle
 from time import time
 import importlib
 from tensorboardX import SummaryWriter
-
-torch.cuda.manual_seed_all(42)
-torch.manual_seed(42)
-np.random.seed(42)
-
 
 parser = argparse.ArgumentParser(description='Net training')
 parser.add_argument('--lr', default=0.001, type=float, help='start learning rate')
@@ -46,6 +43,7 @@ parser.add_argument('--weight_decay', type=float, default=0.)
 parser.add_argument('--decay', default=None, type=float, help='Decay rate')
 parser.add_argument('--finetune_bn', action='store_true')
 parser.add_argument('--log_grads', action='store_true')
+parser.add_argument('--log_params', action='store_true')
 parser.add_argument('--log_snr', action='store_true')
 parser.add_argument('--noiid', action='store_true')
 parser.add_argument('--var_strategy', default='vanilla')
@@ -57,12 +55,19 @@ parser.add_argument('--sample_w_init', type=float, default=0.)
 parser.add_argument('--sample_w_iter', type=int, default=None)
 parser.add_argument('--data', default='cifar')
 parser.add_argument('--log_n_epochs', default=10, type=int)
+parser.add_argument('--seed', default=42, type=int)
+parser.add_argument('--b1', default=0.9, type=float)
+parser.add_argument('--b2', default=0.999, type=float)
 args = parser.parse_args()
 args.script = os.path.basename(__file__)
 
 use_cuda = torch.cuda.is_available()
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
+
+torch.cuda.manual_seed_all(args.seed)
+torch.manual_seed(args.seed)
+np.random.seed(args.seed)
 
 # tensorbord writer
 writer = SummaryWriter(args.log_dir)
@@ -144,7 +149,8 @@ else:
     params = net.parameters()
 
 criterion = nn.CrossEntropyLoss().cuda()
-optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.weight_decay)
+optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.weight_decay,
+                       betas=(args.b1, args.b2))
 
 # TODO: manage optimizer state
 if args.resume and not args.finetune_bn:
@@ -246,6 +252,11 @@ for epoch in range(args.epochs):
                 norm = float((to_np(param.grad).reshape((-1,))**2).mean()**0.5)
                 grad_norms[name].append(norm)
 
+    if args.log_params:
+        for name, param in net.named_parameters():
+            writer.add_histogram('{}/values'.format(name), param.data.cpu().numpy().flatten(),
+                                 bins='auto', global_step=epoch + 1)
+
     if args.log_grads:
         for name, norm in grad_norms.items():
             writer.add_histogram('{}/grad-norm'.format(name), np.array(norm), bins='auto', global_step=epoch + 1)
@@ -314,7 +325,9 @@ for epoch in range(args.epochs):
                 big_log['BN-{}/logvar_mean'.format(i + 1)] = bn.running_logvar_mean.cpu().numpy()
                 big_log['BN-{}/logvar_var'.format(i + 1)] = bn.running_logvar_var.cpu().numpy()
 
-            # Calculate ensemble accuracy and loss on test set
+            # ---------------
+            # Calculate ensemble accuracy and loss on TEST set
+
             set_MyBN_strategy(net, var_strategy='sample', mean_strategy='sample')
             set_sample_policy(net, sample_policy='one')
             ens_proba, gt_labels = predict_proba(testloader, net, ensemble=30, n_classes=NCLASSES)
@@ -323,13 +336,47 @@ for epoch in range(args.epochs):
             big_log['ens_proba'] = ens_proba
             big_log['ens_labels'] = gt_labels
 
-            ens_loss = -np.sum(np.log(ens_proba[np.arange(ens_proba.shape[0]), gt_labels]))
-            writer.add_scalar('log-loss/ensemble/test', float(np.log(ens_loss)) / float(NTEST), global_step=epoch)
+            ens_loss = -np.log(ens_proba[np.arange(ens_proba.shape[0]), gt_labels])
+            writer.add_scalar('log-loss/ensemble/test',
+                              float(np.log(np.mean(ens_loss))), global_step=epoch)
+
+            correct = (np.argmax(ens_proba, axis=1) == gt_labels)
+            writer.add_scalar('log-loss/ensemble/test/correct',
+                              float(np.log(np.mean(ens_loss[correct]))), global_step=epoch)
+            writer.add_scalar('log-loss/ensemble/test/incorrect',
+                              float(np.log(np.mean(ens_loss[~correct]))), global_step=epoch)
 
             ens_entropy = entropy(ens_proba)
+            writer.add_histogram('entropy/ensemble/test/correct', ens_entropy[correct], epoch + 1, bins='auto')
+            writer.add_histogram('entropy/ensemble/test/incorrect', ens_entropy[~correct], epoch + 1, bins='auto')
+
+            # ------------
+            # Calculate ensemble accuracy and loss on TRAIN set
+
+            set_MyBN_strategy(net, var_strategy='sample', mean_strategy='sample')
+            set_sample_policy(net, sample_policy='one')
+            ens_proba, gt_labels = predict_proba(trainloader, net, ensemble=30, n_classes=NCLASSES)
+            ens_acc = np.mean(np.argmax(ens_proba, axis=1) == gt_labels)
+            writer.add_scalar('accuracy/ensemble/train', float(ens_acc), global_step=epoch)
+            big_log['ens_proba_train'] = ens_proba
+            big_log['ens_labels_train'] = gt_labels
+
+            ens_loss = -np.log(ens_proba[np.arange(ens_proba.shape[0]), gt_labels])
+            writer.add_scalar('log-loss/ensemble/train', float(np.log(np.mean(ens_loss))),
+                              global_step=epoch)
+
             correct = (np.argmax(ens_proba, axis=1) == gt_labels)
-            writer.add_histogram('entropy/ensemble/correct', ens_entropy[correct], epoch + 1, bins='auto')
-            writer.add_histogram('entropy/ensemble/incorrect', ens_entropy[~correct], epoch + 1, bins='auto')
+            writer.add_scalar('log-loss/ensemble/train/correct',
+                              float(np.log(np.mean(ens_loss[correct]))), global_step=epoch)
+            writer.add_scalar('log-loss/ensemble/train/incorrect',
+                              float(np.log(np.mean(ens_loss[~correct]))), global_step=epoch)
+
+            ens_entropy = entropy(ens_proba)
+            writer.add_histogram('entropy/ensemble/train/correct', ens_entropy[correct], epoch + 1, bins='auto')
+            writer.add_histogram('entropy/ensemble/train/incorrect', ens_entropy[~correct], epoch + 1, bins='auto')
+
+        # -------------
+        # Calculate eval mode accuracy and loss on TEST set
 
         set_MyBN_strategy(net, var_strategy='running', mean_strategy='running')
         set_sample_policy(net, sample_policy='one')
@@ -337,10 +384,43 @@ for epoch in range(args.epochs):
         big_log['eval_proba'] = eval_proba
         big_log['eval_labels'] = gt_labels
 
+        eval_loss = -np.log(eval_proba[np.arange(eval_proba.shape[0]), gt_labels])
+        writer.add_scalar('log-loss/eval/test',
+                          float(np.log(np.mean(eval_loss))), global_step=epoch)
+
+        correct = (np.argmax(eval_proba, axis=1) == gt_labels)
+        writer.add_scalar('log-loss/eval/test/correct',
+                          float(np.log(np.mean(eval_loss[correct]))), global_step=epoch)
+        writer.add_scalar('log-loss/eval/test/incorrect',
+                          float(np.log(np.mean(eval_loss[~correct]))), global_step=epoch)
+
         eval_entropy = entropy(eval_proba)
         correct = (np.argmax(eval_proba, axis=1) == gt_labels)
-        writer.add_histogram('entropy/eval/correct', eval_entropy[correct], epoch + 1, bins='auto')
-        writer.add_histogram('entropy/eval/incorrect', eval_entropy[~correct], epoch + 1, bins='auto')
+        writer.add_histogram('entropy/eval/test/correct', eval_entropy[correct], epoch + 1, bins='auto')
+        writer.add_histogram('entropy/eval/test/incorrect', eval_entropy[~correct], epoch + 1, bins='auto')
+
+        # -------------
+        # Calculate eval mode accuracy and loss on TRAIN set
+
+        set_MyBN_strategy(net, var_strategy='running', mean_strategy='running')
+        set_sample_policy(net, sample_policy='one')
+        eval_proba, gt_labels = predict_proba(trainloader, net, ensemble=1, n_classes=NCLASSES)
+        big_log['eval_proba_train'] = eval_proba
+        big_log['eval_labels_train'] = gt_labels
+
+        eval_loss = -np.log(eval_proba[np.arange(eval_proba.shape[0]), gt_labels])
+        writer.add_scalar('log-loss/eval/train',
+                          float(np.log(np.mean(eval_loss))), global_step=epoch)
+
+        correct = (np.argmax(eval_proba, axis=1) == gt_labels)
+        writer.add_scalar('log-loss/eval/train/correct', float(np.log(np.mean(eval_loss[correct]))), global_step=epoch)
+        writer.add_scalar('log-loss/eval/train/incorrect',
+                          float(np.log(np.mean(eval_loss[~correct]))), global_step=epoch)
+
+        eval_entropy = entropy(eval_proba)
+        correct = (np.argmax(eval_proba, axis=1) == gt_labels)
+        writer.add_histogram('entropy/eval/train/correct', eval_entropy[correct], epoch + 1, bins='auto')
+        writer.add_histogram('entropy/eval/train/incorrect', eval_entropy[~correct], epoch + 1, bins='auto')
 
         torch.save(big_log, os.path.join(args.log_dir, 'big_log-{}'.format(epoch + 1)))
 

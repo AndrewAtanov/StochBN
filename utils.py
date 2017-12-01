@@ -121,7 +121,7 @@ def get_model(model='ResNet18', **kwargs):
         raise NotImplementedError('unknown {} model'.format(model))
 
 
-def get_dataloader(data='cifar', bs=128, augmentation=True, noiid=False):
+def get_dataloader(data='cifar', bs=128, augmentation=True, noiid=False, shuffle=True):
     transform_train = transforms.Compose([
         MyPad(4),
         transforms.RandomCrop(32),
@@ -163,7 +163,7 @@ def get_dataloader(data='cifar', bs=128, augmentation=True, noiid=False):
         noiidsampler = CIFARNoIIDSampler(trainset)
         trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, sampler=noiidsampler, num_workers=2)
     else:
-        trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, shuffle=True, num_workers=2)
+        trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, shuffle=shuffle, num_workers=2)
 
     testloader = torch.utils.data.DataLoader(testset, batch_size=200, shuffle=False, num_workers=2)
 
