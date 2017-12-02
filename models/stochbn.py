@@ -15,7 +15,8 @@ def mean_features(x):
 
 
 class _MyBatchNorm(nn.Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, mode=None):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, mode=None,
+                 learn_stats=False):
         super(_MyBatchNorm, self).__init__()
         self.num_features = num_features
         self.affine = affine
@@ -23,6 +24,7 @@ class _MyBatchNorm(nn.Module):
         self.momentum = momentum
         self.stats_momentum = momentum
         self.sample_weight = 1.
+        self.learn_stats = learn_stats
         if self.affine:
             self.weight = Parameter(torch.Tensor(num_features))
             self.bias = Parameter(torch.Tensor(num_features))
@@ -51,34 +53,36 @@ class _MyBatchNorm(nn.Module):
 
         self._sum_m = 0
 
-        self.register_buffer('means', torch.zeros(num_features))
-        self.register_buffer('vars', torch.ones(num_features))
+        # self.register_buffer('means', torch.zeros(num_features))
+        # self.register_buffer('vars', torch.ones(num_features))
+        #
+        # self.register_buffer('zeros', torch.zeros(num_features))
+        # self.register_buffer('ones', torch.ones(num_features))
 
-        self.register_buffer('zeros', torch.zeros(num_features))
-        self.register_buffer('ones', torch.ones(num_features))
-
-        self.register_buffer('sum_m', torch.zeros(num_features))
-        self.register_buffer('sum_m2', torch.zeros(num_features))
-        self.register_buffer('sum_logvar', torch.zeros(num_features))
-        self.register_buffer('sum_var', torch.zeros(num_features))
-        self.register_buffer('sum_var2', torch.zeros(num_features))
+        # self.register_buffer('sum_m', torch.zeros(num_features))
+        # self.register_buffer('sum_m2', torch.zeros(num_features))
+        # self.register_buffer('sum_logvar', torch.zeros(num_features))
+        # self.register_buffer('sum_var', torch.zeros(num_features))
+        # self.register_buffer('sum_var2', torch.zeros(num_features))
 
         self.register_buffer('running_m', torch.zeros(num_features))
         self.register_buffer('running_m2', torch.zeros(num_features))
         self.register_buffer('running_logvar', torch.zeros(num_features))
         self.register_buffer('running_logvar2', torch.zeros(num_features))
 
-        self.register_buffer('mean_mean', torch.zeros(num_features))
-        self.register_buffer('mean_var', torch.ones(num_features))
-        self.register_buffer('var_shape', torch.zeros(num_features))
-        self.register_buffer('var_scale', torch.zeros(num_features))
+        if self.learn_stats:
+            self.running_mean_mean = Parameter(torch.Tensor(self.num_features))
+            self.running_mean_var = Parameter(torch.Tensor(self.num_features))
+            self.running_logvar_mean = Parameter(torch.Tensor(self.num_features))
+            self.running_logvar_var = Parameter(torch.Tensor(self.num_features))
+        else:
+            self.register_buffer('running_mean_mean', torch.zeros(num_features))
+            self.register_buffer('running_mean_var', torch.ones(num_features))
+            self.register_buffer('running_logvar_mean', torch.zeros(num_features))
+            self.register_buffer('running_logvar_var', torch.ones(num_features))
 
-        self.register_buffer('running_mean_mean', torch.zeros(num_features))
-        self.register_buffer('running_mean_var', torch.ones(num_features))
-        self.register_buffer('running_logvar_mean', torch.zeros(num_features))
-        self.register_buffer('running_logvar_var', torch.ones(num_features))
-        self.register_buffer('running_var_shape', torch.zeros(num_features))
-        self.register_buffer('running_var_scale', torch.zeros(num_features))
+        # self.register_buffer('running_var_shape', torch.zeros(num_features))
+        # self.register_buffer('running_var_scale', torch.zeros(num_features))
 
         self.reset_parameters()
 
@@ -176,7 +180,7 @@ class _MyBatchNorm(nn.Module):
         running_logvar_mean = Variable(self.running_logvar_mean, requires_grad=False)
         running_logvar_var = Variable(self.running_logvar_var, requires_grad=False)
 
-        if self.__update_policy == 'before' and self.training:
+        if self.__update_policy == 'before' and self.training and (not self.learn_stats):
             running_m = Variable((1 - self.stats_momentum) * self.running_m) + self.stats_momentum * cur_mean
             running_m2 = Variable((1 - self.stats_momentum) * self.running_m2) + self.stats_momentum * (cur_mean ** 2)
 
@@ -228,8 +232,11 @@ class _MyBatchNorm(nn.Module):
         else:
             raise NotImplementedError('Unknown mean strategy: {}'.format(self.mean_strategy))
 
-        if self.training:
+        if self.training and (not self.learn_stats):
             self.update_smoothed_stats()
+        else:
+            self.running_mean.copy_(self.running_mean_mean)
+            self.running_var.copy_(torch.exp(self.running_logvar_mean))
 
         return self.batch_norm(input, means, vars + self.eps)
 

@@ -14,10 +14,11 @@ cfg = {
 
 
 class VGG(nn.Module):
-    def __init__(self, vgg_name, k=1, dropout=None, n_classes=10):
+    def __init__(self, vgg_name, k=1, dropout=None, n_classes=10, learn_bn_stats=False):
         super(VGG, self).__init__()
         self.use_dropout = not (dropout is None)
         self.dropout_rate = dropout
+        self.learn_bn_stats = learn_bn_stats
 
         self.features = self._make_layers(cfg[vgg_name], k)
         if self.use_dropout:
@@ -41,7 +42,7 @@ class VGG(nn.Module):
             else:
                 x = int(x * k)
                 layers += [nn.Conv2d(in_channels, x, kernel_size=3, padding=1),
-                           MyBatchNorm2d(x),
+                           MyBatchNorm2d(x, learn_stats=self.learn_bn_stats),
                            nn.ReLU(inplace=True)]
                 if self.use_dropout and config[i + 1] != 'M':
                     layers += [nn.Dropout(self.dropout_rate[1])]

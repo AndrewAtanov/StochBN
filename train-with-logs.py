@@ -46,6 +46,7 @@ parser.add_argument('--log_grads', action='store_true')
 parser.add_argument('--log_params', action='store_true')
 parser.add_argument('--log_snr', action='store_true')
 parser.add_argument('--noiid', action='store_true')
+parser.add_argument('--learn_bn_stats', action='store_true')
 parser.add_argument('--var_strategy', default='vanilla')
 parser.add_argument('--mean_strategy', default='vanilla')
 parser.add_argument('--sample_policy', default='one')
@@ -330,7 +331,7 @@ for epoch in range(args.epochs):
 
             set_MyBN_strategy(net, var_strategy='sample', mean_strategy='sample')
             set_sample_policy(net, sample_policy='one')
-            ens_proba, gt_labels = predict_proba(testloader, net, ensemble=30, n_classes=NCLASSES)
+            ens_proba, gt_labels = predict_proba(testloader, net, ensembles=30, n_classes=NCLASSES)
             ens_acc = np.mean(np.argmax(ens_proba, axis=1) == gt_labels)
             writer.add_scalar('accuracy/ensemble/test', float(ens_acc), global_step=epoch)
             big_log['ens_proba'] = ens_proba
@@ -355,7 +356,7 @@ for epoch in range(args.epochs):
 
             set_MyBN_strategy(net, var_strategy='sample', mean_strategy='sample')
             set_sample_policy(net, sample_policy='one')
-            ens_proba, gt_labels = predict_proba(trainloader, net, ensemble=30, n_classes=NCLASSES)
+            ens_proba, gt_labels = predict_proba(trainloader, net, ensembles=30, n_classes=NCLASSES)
             ens_acc = np.mean(np.argmax(ens_proba, axis=1) == gt_labels)
             writer.add_scalar('accuracy/ensemble/train', float(ens_acc), global_step=epoch)
             big_log['ens_proba_train'] = ens_proba
@@ -380,7 +381,7 @@ for epoch in range(args.epochs):
 
         set_MyBN_strategy(net, var_strategy='running', mean_strategy='running')
         set_sample_policy(net, sample_policy='one')
-        eval_proba, gt_labels = predict_proba(testloader, net, ensemble=1, n_classes=NCLASSES)
+        eval_proba, gt_labels = predict_proba(testloader, net, ensembles=1, n_classes=NCLASSES)
         big_log['eval_proba'] = eval_proba
         big_log['eval_labels'] = gt_labels
 
@@ -404,7 +405,7 @@ for epoch in range(args.epochs):
 
         set_MyBN_strategy(net, var_strategy='running', mean_strategy='running')
         set_sample_policy(net, sample_policy='one')
-        eval_proba, gt_labels = predict_proba(trainloader, net, ensemble=1, n_classes=NCLASSES)
+        eval_proba, gt_labels = predict_proba(trainloader, net, ensembles=1, n_classes=NCLASSES)
         big_log['eval_proba_train'] = eval_proba
         big_log['eval_labels_train'] = gt_labels
 
