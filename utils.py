@@ -53,22 +53,6 @@ class Ensemble:
         return self.cum_proba / self.__n_estimators
 
 
-def predict_proba(dataloader, net, ensemble=1, n_classes=10):
-    proba = np.zeros((len(dataloader.dataset), n_classes))
-    labels = []
-    p = 0
-    for img, label in dataloader:
-        ens = Ensemble()
-        img = Variable(img).cuda()
-        for _ in range(ensemble):
-            pred = net(img).data.cpu().numpy()
-            ens.add_estimator(pred)
-        proba[p: p + pred.shape[0]] = ens.get_proba()
-        p += pred.shape[0]
-        labels += label.tolist()
-    return proba, np.array(labels)
-
-
 class AccCounter:
     def __init__(self):
         self.__n_objects = 0
@@ -110,7 +94,7 @@ def get_model(model='ResNet18', **kwargs):
         return class_for_name('models', model)()
     elif 'VGG' in model:
         return VGG(vgg_name=model, k=kwargs['k'], dropout=kwargs.get('dropout', None),
-                   n_classes=kwargs.get('n_classes', 10))
+                   n_classes=kwargs.get('n_classes', 10), )
     elif 'LeNet' == model:
         return LeNet()
     elif 'FC' == model:
@@ -188,35 +172,35 @@ def make_description(args):
     return '{}'.format(vars(args))
 
 
-def test_batch_avg(net, data, labels, n_tries=1, seed=42):
-    np.random.seed(42)
-
-    ens = Ensemble()
-    for _ in range(n_infer):
-        logits = np.zeros([acc_data.shape[0], 10])
-        if args.augmentation:
-            acc_data = np.array(list(map(lambda x: transform_train(x).numpy(),
-                                         testset.test_data if args.acc == 'test' else trainset.train_data)))
-        else:
-            acc_data = np.array(list(map(lambda x: transform_test(x).numpy(),
-                                         testset.test_data if args.acc == 'test' else trainset.train_data)))
-
-        if args.permute:
-            perm = np.random.permutation(np.arange(acc_data.shape[0]))
-        else:
-            perm = np.arange(acc_data.shape[0])
-
-        for i in range(0, len(perm), BS):
-            idxs = perm[i: i + BS]
-            inputs = Variable(torch.Tensor(acc_data[idxs]).cuda(async=True))
-            outputs = net(inputs)
-            assert np.allclose(logits[idxs], 0.)
-            logits[idxs] = outputs.cpu().data.numpy()
-
-        ens.add_estimator(logits)
-
-    counter = AccCounter()
-    counter.add(ens.get_proba(), acc_labels)
+# def test_batch_avg(net, data, labels, n_tries=1, seed=42):
+#     np.random.seed(42)
+#
+#     ens = Ensemble()
+#     for _ in range(n_infer):
+#         logits = np.zeros([acc_data.shape[0], 10])
+#         if args.augmentation:
+#             acc_data = np.array(list(map(lambda x: transform_train(x).numpy(),
+#                                          testset.test_data if args.acc == 'test' else trainset.train_data)))
+#         else:
+#             acc_data = np.array(list(map(lambda x: transform_test(x).numpy(),
+#                                          testset.test_data if args.acc == 'test' else trainset.train_data)))
+#
+#         if args.permute:
+#             perm = np.random.permutation(np.arange(acc_data.shape[0]))
+#         else:
+#             perm = np.arange(acc_data.shape[0])
+#
+#         for i in range(0, len(perm), BS):
+#             idxs = perm[i: i + BS]
+#             inputs = Variable(torch.Tensor(acc_data[idxs]).cuda(async=True))
+#             outputs = net(inputs)
+#             assert np.allclose(logits[idxs], 0.)
+#             logits[idxs] = outputs.cpu().data.numpy()
+#
+#         ens.add_estimator(logits)
+#
+#     counter = AccCounter()
+#     counter.add(ens.get_proba(), acc_labels)
 
 
 def manage_state(net, ckpt_state):
@@ -312,6 +296,100 @@ def log_params_info(net, writer, step):
             writer.add_histogram('{}/grad'.format(name), to_np(param.grad), step, bins='auto')
         except:
             print('---- ', name)
+
+
+def ensemble(net, data, bs, n_infer=50):
+    """ Ensemble for net training with Vanilla BN """
+    transform_test = transforms.Compose([
+        transforms.ToTensor(),
+    ])
+
+    ens = Ensemble()
+    acc_data = np.array(list(map(lambda x: transform_test(x).numpy(), data)))
+    for _ in range(n_infer):
+        logits = np.zeros([acc_data.shape[0], 5])
+        perm = np.random.permutation(np.arange(acc_data.shape[0]))
+
+        for i in range(0, len(perm), bs):
+            idxs = perm[i: i + bs]
+            inputs = Variable(torch.Tensor(acc_data[idxs]).cuda(async=True))
+            outputs = net(inputs)
+            assert np.allclose(logits[idxs], 0.)
+            logits[idxs] = outputs.cpu().data.numpy()
+
+        ens.add_estimator(logits)
+    return ens.get_proba()
+
+
+def predict_proba(dataloader, net, ensembles=1, n_classes=10):
+    proba = np.zeros((len(dataloader.dataset), n_classes))
+    labels = []
+    p = 0
+    for img, label in dataloader:
+        ens = Ensemble()
+        img = Variable(img).cuda()
+        for _ in range(ensembles):
+            pred = net(img).data.cpu().numpy()
+            ens.add_estimator(pred)
+        proba[p: p + pred.shape[0]] = ens.get_proba()
+        p += pred.shape[0]
+        labels += label.tolist()
+    return proba, np.array(labels)
+
+
+def uncertainty_acc(net, known, unknown, ensembles=50, bn_type='StochBN', n_classes=5,
+                    sample_policy='one', bs=None, vanilla_known=None, vanilla_unknown=None):
+    net.eval()
+    set_bn_mode(net, mode='StochBN')
+    set_MyBN_strategy(net, mean_strategy='running', var_strategy='running')
+    kn, unkn = {}, {}
+    net.eval()
+    p, l = predict_proba(unknown, net, n_classes=n_classes)
+    unkn['eval/entropy'] = entropy(p)
+
+    p, l = predict_proba(known, net, n_classes=n_classes)
+    kn['eval/entropy'] = entropy(p)
+    kn['eval/acc'] = np.mean(p.argmax(1) == l)
+
+    if bn_type == 'StochBN':
+        set_MyBN_strategy(net, mean_strategy='sample', var_strategy='sample')
+        p, l = predict_proba(unknown, net, ensembles=ensembles, n_classes=n_classes)
+        unkn['ensemble/entropy'] = entropy(p)
+
+        p, l = predict_proba(known, net, ensembles=ensembles, n_classes=n_classes)
+        kn['ensemble/entropy'] = entropy(p)
+        kn['ensemble/entropy'] = np.mean(p.argmax(1) == l)
+
+        set_MyBN_strategy(net, mean_strategy='sample', var_strategy='sample')
+        p, l = predict_proba(unknown, net, ensembles=1, n_classes=n_classes)
+        unkn['one_shot/entropy'] = entropy(p)
+
+        p, l = predict_proba(known, net, ensembles=1, n_classes=n_classes)
+        kn['one_shot/entropy'] = entropy(p)
+        kn['one_shot/entropy'] = np.mean(p.argmax(1) == l)
+
+    elif bn_type == 'BN':
+        data, labels = vanilla_unknown
+        set_MyBN_strategy(net, mean_strategy='batch', var_strategy='batch')
+        ens_p = ensemble(net, data, bs, n_infer=ensembles)
+        unkn['ensemble/entropy'] = entropy(ens_p)
+
+        data, labels = vanilla_known
+        ens_p = ensemble(net, data, bs, n_infer=ensembles)
+        kn['ensemble/entropy'] = entropy(ens_p)
+        kn['ensemble/acc'] = np.mean(ens_p.argmax(1) == labels)
+
+        data, labels = vanilla_unknown
+        set_MyBN_strategy(net, mean_strategy='batch', var_strategy='batch')
+        ens_p = ensemble(net, data, bs, n_infer=1)
+        unkn['one_shot/entropy'] = entropy(ens_p)
+
+        data, labels = vanilla_known
+        ens_p = ensemble(net, data, bs, n_infer=1)
+        kn['one_shot/entropy'] = entropy(ens_p)
+        kn['one_shot/acc'] = np.mean(ens_p.argmax(1) == labels)
+
+    return unkn, kn
 
 
 class CIFARNoIIDSampler(object):
