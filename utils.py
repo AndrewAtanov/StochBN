@@ -372,7 +372,6 @@ def predict_proba(dataloader, net, ensembles=1, n_classes=10):
 def uncertainty_acc(net, known, unknown, ensembles=50, bn_type='StochBN', n_classes=5,
                     sample_policy='one', bs=None, vanilla_known=None, vanilla_unknown=None):
     net.eval()
-    set_bn_mode(net, mode='StochBN')
     set_MyBN_strategy(net, mean_strategy='running', var_strategy='running')
     kn, unkn = {}, {}
     net.eval()
@@ -390,7 +389,7 @@ def uncertainty_acc(net, known, unknown, ensembles=50, bn_type='StochBN', n_clas
 
         p, l = predict_proba(known, net, ensembles=ensembles, n_classes=n_classes)
         kn['ensemble/entropy'] = entropy(p)
-        kn['ensemble/entropy'] = np.mean(p.argmax(1) == l)
+        kn['ensemble/acc'] = np.mean(p.argmax(1) == l)
 
         set_MyBN_strategy(net, mean_strategy='sample', var_strategy='sample')
         p, l = predict_proba(unknown, net, ensembles=1, n_classes=n_classes)
@@ -398,7 +397,7 @@ def uncertainty_acc(net, known, unknown, ensembles=50, bn_type='StochBN', n_clas
 
         p, l = predict_proba(known, net, ensembles=1, n_classes=n_classes)
         kn['one_shot/entropy'] = entropy(p)
-        kn['one_shot/entropy'] = np.mean(p.argmax(1) == l)
+        kn['one_shot/acc'] = np.mean(p.argmax(1) == l)
 
     elif bn_type == 'BN':
         data, labels = vanilla_unknown
@@ -420,6 +419,8 @@ def uncertainty_acc(net, known, unknown, ensembles=50, bn_type='StochBN', n_clas
         ens_p = ensemble(net, data, bs, n_infer=1)
         kn['one_shot/entropy'] = entropy(ens_p)
         kn['one_shot/acc'] = np.mean(ens_p.argmax(1) == labels)
+    else:
+        raise NotImplementedError
 
     return unkn, kn
 
