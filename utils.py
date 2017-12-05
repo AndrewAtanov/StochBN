@@ -128,7 +128,7 @@ def get_model(model='ResNet18', **kwargs):
         raise NotImplementedError('unknown {} model'.format(model))
 
 
-def get_dataloader(data='cifar', bs=128, augmentation=True, noiid=False, shuffle=True, data_root='./data'):
+def get_dataloader(data='cifar', train_bs=128, test_bs=200, augmentation=True, noiid=False, shuffle=True, data_root='./data'):
     transform_train = transforms.Compose([
         MyPad(4),
         transforms.RandomCrop(32),
@@ -168,11 +168,11 @@ def get_dataloader(data='cifar', bs=128, augmentation=True, noiid=False, shuffle
         if data != 'cifar':
             raise NotImplementedError
         noiidsampler = CIFARNoIIDSampler(trainset)
-        trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, sampler=noiidsampler, num_workers=2)
+        trainloader = torch.utils.data.DataLoader(trainset, batch_size=train_bs, sampler=noiidsampler, num_workers=2)
     else:
-        trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, shuffle=shuffle, num_workers=2)
+        trainloader = torch.utils.data.DataLoader(trainset, batch_size=train_bs, shuffle=shuffle, num_workers=2)
 
-    testloader = torch.utils.data.DataLoader(testset, batch_size=200, shuffle=False, num_workers=2)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=test_bs, shuffle=False, num_workers=2)
 
     return trainloader, testloader
 
@@ -369,7 +369,7 @@ def predict_proba(dataloader, net, ensembles=1, n_classes=10):
     return proba, np.array(labels)
 
 
-def uncertainty_acc(net, known, unknown, ensembles=50, bn_type='StochBN', n_classes=5,
+def uncertainty_acc(net, known=None, unknown=None, ensembles=50, bn_type='StochBN', n_classes=5,
                     sample_policy='one', bs=None, vanilla_known=None, vanilla_unknown=None):
     net.eval()
     set_MyBN_strategy(net, mean_strategy='running', var_strategy='running')
