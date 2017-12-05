@@ -10,24 +10,23 @@ import importlib
 import sys
 import pickle
 import torchvision
-import tensorboardX
 from torchvision import transforms
 import PIL
 
 
-def uniquify(path, sep = ''):
+def uniquify(path, sep=''):
     def name_sequence():
         count = IT.count()
         yield ''
         while True:
-            yield '{s}{n:d}'.format(s = sep, n = next(count))
+            yield '{s}{n:d}'.format(s=sep, n=next(count))
     orig = tempfile._name_sequence
     with tempfile._once_lock:
         tempfile._name_sequence = name_sequence()
         path = os.path.normpath(path)
         dirname, basename = os.path.split(path)
         filename, ext = os.path.splitext(basename)
-        fd, filename = tempfile.mkstemp(dir = dirname, prefix = filename, suffix = ext)
+        fd, filename = tempfile.mkstemp(dir=dirname, prefix=filename, suffix=ext)
         tempfile._name_sequence = orig
     return filename
 
