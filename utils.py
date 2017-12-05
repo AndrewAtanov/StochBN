@@ -33,39 +33,63 @@ def uniquify(path, sep = ''):
 
 
 class Ensemble:
+    """
+    Ensemble for classification. Take logits and average probabilities using softmax.
+    """
     def __init__(self):
         self.__n_estimators = 0
         self.cum_proba = 0
 
     def add_estimator(self, logits):
+        """
+        Add estimator to current ensemble. First call define number of objects (N) and number of classes (K).
+        :param logits: ndarray of logits with shape (N, K)
+        """
         l = np.exp(logits - logits.max(1)[:, np.newaxis])
         try:
             assert not np.isnan(l).any(), 'NaNs while computing softmax'
             self.cum_proba += l / l.sum(1)[:, np.newaxis]
             assert not np.isnan(self.cum_proba).any(), 'NaNs while computing softmax'
-        except:
-            print(' Save logits to dubug.npy ')
-            np.save('dubug.npy', logits)
-            raise
+        except Exception as e:
+            raise e
         self.__n_estimators += 1
 
     def get_proba(self):
+        """
+        :return: ndarray with probabilities of shape (N, K)
+        """
         return self.cum_proba / self.__n_estimators
 
 
 class AccCounter:
+    """
+    Class for count accuracy during pass through data with mini-batches.
+    """
     def __init__(self):
         self.__n_objects = 0
         self.__sum = 0
 
     def add(self, outputs, targets):
+        """
+        Compute and save stats needed for overall accuracy.
+        :param outputs: ndarray of predicted values (logits or probabilities)
+        :param targets: ndarray of labels with the same length as first dimension of _outputs_
+        """
         self.__sum += np.sum(outputs.argmax(axis=1) == targets)
         self.__n_objects += outputs.shape[0]
 
     def acc(self):
+        """
+        Compute current accuracy.
+        :return: float accuracy.
+        """
         return self.__sum * 1. / self.__n_objects
 
     def flush(self):
+        """
+        Flush stats.
+        :return:
+        """
         self.__n_objects = 0
         self.__sum = 0
 
@@ -99,13 +123,13 @@ def get_model(model='ResNet18', **kwargs):
         return LeNet()
     elif 'FC' == model:
         return FC()
-    elif 'LeNetCifar' == model:
-        return LeNetCifar(n_classes=kwargs.get('n_classes', None), dropout=kwargs.get('dropout', None))
+    # elif 'LeNetCifar' == model:
+    #     return LeNetCifar(n_classes=kwargs.get('n_classes', None), dropout=kwargs.get('dropout', None))
     else:
         raise NotImplementedError('unknown {} model'.format(model))
 
 
-def get_dataloader(data='cifar', bs=128, augmentation=True, noiid=False, shuffle=True):
+def get_dataloader(data='cifar', bs=128, augmentation=True, noiid=False, shuffle=True, data_root='./data'):
     transform_train = transforms.Compose([
         MyPad(4),
         transforms.RandomCrop(32),
@@ -118,26 +142,26 @@ def get_dataloader(data='cifar', bs=128, augmentation=True, noiid=False, shuffle
     ])
 
     if data == 'cifar':
-        trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True,
+        trainset = torchvision.datasets.CIFAR10(root=data_root, train=True, download=True,
                                                 transform=transform_train if augmentation else transform_test)
-        testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+        testset = torchvision.datasets.CIFAR10(root=data_root, train=False, download=True, transform=transform_test)
     elif data == 'SVHN':
-        trainset = torchvision.datasets.SVHN(root='./data', split='train', download=True,
+        trainset = torchvision.datasets.SVHN(root=data_root, split='train', download=True,
                                              transform=transform_train if augmentation else transform_test)
-        testset = torchvision.datasets.SVHN(root='./data', split='test', download=True, transform=transform_test)
+        testset = torchvision.datasets.SVHN(root=data_root, split='test', download=True, transform=transform_test)
     elif data == 'mnist':
-        trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform_test)
-        testset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform_test)
+        trainset = torchvision.datasets.MNIST(root=data_root, train=True, download=True, transform=transform_test)
+        testset = torchvision.datasets.MNIST(root=data_root, train=False, download=True, transform=transform_test)
     elif data == 'cifar5':
         CIFAR5_CLASSES = [0, 1, 2, 3, 4]
-        trainset = CIFAR(root='./data', train=True, download=True,
+        trainset = CIFAR(root=data_root, train=True, download=True,
                          transform=transform_train if augmentation else transform_test, classes=CIFAR5_CLASSES)
-        testset = CIFAR(root='./data', train=False, download=True, transform=transform_test, classes=CIFAR5_CLASSES)
+        testset = CIFAR(root=data_root, train=False, download=True, transform=transform_test, classes=CIFAR5_CLASSES)
     elif data == 'cifar5-rest':
         CIFAR5_CLASSES = [5, 6, 7, 8, 9]
-        trainset = CIFAR(root='./data', train=True, download=True,
+        trainset = CIFAR(root=data_root, train=True, download=True,
                          transform=transform_train if augmentation else transform_test, classes=CIFAR5_CLASSES)
-        testset = CIFAR(root='./data', train=False, download=True, transform=transform_test, classes=CIFAR5_CLASSES)
+        testset = CIFAR(root=data_root, train=False, download=True, transform=transform_test, classes=CIFAR5_CLASSES)
     else:
         raise NotImplementedError
 
@@ -321,6 +345,15 @@ def ensemble(net, data, bs, n_infer=50):
     return ens.get_proba()
 
 
+def predict_proba_batch(batch, net, ensembles=1):
+    ens = Ensemble()
+    img = Variable(batch).cuda()
+    for _ in range(ensembles):
+        pred = net(img).data.cpu().numpy()
+        ens.add_estimator(pred)
+    return ens.get_proba()
+
+
 def predict_proba(dataloader, net, ensembles=1, n_classes=10):
     proba = np.zeros((len(dataloader.dataset), n_classes))
     labels = []
@@ -486,3 +519,30 @@ class CIFAR(torchvision.datasets.CIFAR10):
 
             self.test_data = self.test_data.reshape((10000, 3, 32, 32))[mask]
             self.test_data = self.test_data.transpose((0, 2, 3, 1))  # convert to HWC
+
+
+def fast_adversarial(x, y, net, loss, eps, is_cuda=True):
+    """
+    Implement fast gradient sign method for constructing adversarial example
+
+    :param x: (torch.Tensor) Batch of objects
+    :param y: target for x
+    :param net: (nn.Module) model for which adversarial example constructed
+    :param loss: loss function which gradient w.t. net parameters
+    :param eps:
+    :param is_cuda:
+    :return: (torch.Tensor) batch of adversarial examples for each
+    """
+
+    if is_cuda:
+        inp = Variable(x.cuda(), requires_grad=True)
+        target = Variable(y.cuda())
+    else:
+        inp = Variable(x, requires_grad=True)
+        target = Variable(y)
+
+    pred = net(inp)
+    _l = loss(pred, target)
+    _l.backward()
+
+    return inp.data + eps * torch.sign(inp.grad.data)
