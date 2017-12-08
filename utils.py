@@ -128,7 +128,8 @@ def get_model(model='ResNet18', **kwargs):
         raise NotImplementedError('unknown {} model'.format(model))
 
 
-def get_dataloader(data='cifar', train_bs=128, test_bs=200, augmentation=True, noiid=False, shuffle=True, data_root='./data'):
+def get_dataloader(data='cifar', train_bs=128, test_bs=200, augmentation=True,
+                   noiid=False, shuffle=True, data_root='./data'):
     transform_train = transforms.Compose([
         MyPad(4),
         transforms.RandomCrop(32),
@@ -455,7 +456,7 @@ class CIFAR(torchvision.datasets.CIFAR10):
     """
     def __init__(self, root, train=True,
                  transform=None, target_transform=None,
-                 download=False, classes=None):
+                 download=False, classes=None, random_labeling=False):
 
         if classes is None:
             classes = np.arange(10)
@@ -466,6 +467,7 @@ class CIFAR(torchvision.datasets.CIFAR10):
         self.transform = transform
         self.target_transform = target_transform
         self.train = train  # training set or test set
+        self.random_labeling = random_labeling
 
         if download:
             self.download()
@@ -495,6 +497,8 @@ class CIFAR(torchvision.datasets.CIFAR10):
 
             mask = np.isin(self.train_labels, classes)
             self.train_labels = [classes.index(l) for l, cond in zip(self.train_labels, mask) if cond]
+            if self.random_labeling:
+                self.train_labels = np.random.permutation(self.train_labels)
 
             self.train_data = np.concatenate(self.train_data)
             self.train_data = self.train_data.reshape((50000, 3, 32, 32))[mask]
@@ -545,4 +549,4 @@ def fast_adversarial(x, y, net, loss, eps, is_cuda=True):
     _l = loss(pred, target)
     _l.backward()
 
-    return inp.data + eps * torch.sign(inp.grad.data)
+    return inp.data.cpu() + eps * torch.sign(inp.grad.data.cpu())

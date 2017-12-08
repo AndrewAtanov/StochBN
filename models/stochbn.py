@@ -195,11 +195,15 @@ class _MyBatchNorm(nn.Module):
 
         if self.var_strategy == 'sample':
             if self.__sample_policy == 'one':
-                eps = Variable(torch.randn(self.num_features).cuda())
+                eps = Variable(torch.randn(self.num_features))
+                if self.weight.data.is_cuda:
+                    eps = eps.cuda()
                 sampled_var = torch.exp(eps * torch.sqrt(running_logvar_var) + running_logvar_mean)
                 vars = cur_var * (1. - self.sample_weight) + self.sample_weight * sampled_var
             elif self.__sample_policy == 'bs':
-                eps = Variable(torch.randn(input.size(0), self.num_features).cuda())
+                eps = Variable(torch.randn(input.size(0), self.num_features))
+                if self.weight.data.is_cuda:
+                    eps = eps.cuda()
                 logvar = eps * torch.sqrt(running_logvar_var).view(1, -1) + running_logvar_mean.view(1, -1)
                 sampled_var = torch.exp(logvar)
                 vars = cur_var.view(1, self.num_features) * (1. - self.sample_weight) + self.sample_weight * sampled_var
@@ -216,11 +220,16 @@ class _MyBatchNorm(nn.Module):
 
         if self.mean_strategy == 'sample':
             if self.__sample_policy == 'one':
-                eps = Variable(torch.randn(self.num_features).cuda())
+                eps = Variable(torch.randn(self.num_features))
+                if self.weight.data.is_cuda:
+                    eps = eps.cuda()
+
                 sampled_mean = eps * torch.sqrt(running_mean_var) + running_mean_mean
                 means = cur_mean * (1. - self.sample_weight) + self.sample_weight * sampled_mean
             elif self.__sample_policy == 'bs':
-                eps = Variable(torch.randn(input.size(0), self.num_features).cuda())
+                eps = Variable(torch.randn(input.size(0), self.num_features))
+                if self.weight.data.is_cuda:
+                    eps = eps.cuda()
                 sampled_mean = eps * torch.sqrt(running_mean_var).view(1, -1) + running_mean_mean.view(1, -1)
                 means = cur_mean.view(1, -1) * (1. - self.sample_weight) + self.sample_weight * sampled_mean
             else:
@@ -268,13 +277,13 @@ class _MyBatchNorm(nn.Module):
 
         return self.batch_norm(input, means, vars + self.eps)
 
-    def batch_norm(self, input, means, vars):
-        # TODO: implement for any dimensionality
-        out = input - means.view(-1, self.num_features, 1, 1)
-        out = out / torch.sqrt(vars.view(-1, self.num_features, 1, 1))
-        out = out * self.weight.view(1, self.num_features, 1, 1)
-        out = out + self.bias.view(1, self.num_features, 1, 1)
-        return out
+    # def batch_norm(self, input, means, vars):
+    #     # TODO: implement for any dimensionality
+    #     out = input - means.view(-1, self.num_features, 1, 1)
+    #     out = out / torch.sqrt(vars.view(-1, self.num_features, 1, 1))
+    #     out = out * self.weight.view(1, self.num_features, 1, 1)
+    #     out = out + self.bias.view(1, self.num_features, 1, 1)
+    #     return out
 
     def forward(self, input):
         self._check_input_dim(input)

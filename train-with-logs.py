@@ -57,6 +57,7 @@ parser.add_argument('--log_n_epochs', default=10, type=int)
 parser.add_argument('--seed', default=42, type=int)
 parser.add_argument('--b1', default=0.9, type=float)
 parser.add_argument('--b2', default=0.999, type=float)
+parser.add_argument('--stop_upd_bnstats', default=None, type=int)
 args = parser.parse_args()
 args.script = os.path.basename(__file__)
 
@@ -212,6 +213,9 @@ for epoch in range(args.epochs):
     adjust_learning_rate(optimizer, lr)
 
     net.train()
+    if args.stop_upd_bnstats and (epoch + 1) >= args.stop_upd_bnstats:
+        net.eval()
+
     mean_strategy = args.mean_strategy
     var_strategy = args.var_strategy
 
