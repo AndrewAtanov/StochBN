@@ -459,7 +459,7 @@ class CIFAR(torchvision.datasets.CIFAR10):
                  download=False, classes=None, random_labeling=False):
 
         if classes is None:
-            classes = np.arange(10)
+            classes = np.arange(10).tolist()
 
         self.classes = classes[:]
 

@@ -58,6 +58,7 @@ parser.add_argument('--seed', default=42, type=int)
 parser.add_argument('--b1', default=0.9, type=float)
 parser.add_argument('--b2', default=0.999, type=float)
 parser.add_argument('--stop_upd_bnstats', default=None, type=int)
+parser.add_argument('--random_labeling', action='store_true')
 args = parser.parse_args()
 args.script = os.path.basename(__file__)
 
@@ -88,9 +89,12 @@ transform_test = transforms.Compose([
 ])
 
 if args.data == 'cifar':
-    trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True,
-                                            transform=transform_train if args.augmentation else transform_test)
-    testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+    trainset = CIFAR(root='./data', train=True, download=True,
+                     transform=transform_train if args.augmentation else transform_test,
+                     random_labeling=args.random_labeling)
+    testset = CIFAR(root='./data', train=False, download=True, transform=transform_test)
+    NTEST = testset.test_data.shape[0]
+    NTRAIN = trainset.train_data.shape[0]
 elif args.data == 'mnist':
     trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True,
                                           transform=transform_train if args.augmentation else transform_test)
@@ -101,7 +105,8 @@ elif args.data == 'cifar5':
     NCLASSES = 5
     CIFAR5_CLASSES = [0, 1, 2, 3, 4]
     trainset = CIFAR(root='./data', train=True, download=True,
-                     transform=transform_train if args.augmentation else transform_test, classes=CIFAR5_CLASSES)
+                     transform=transform_train if args.augmentation else transform_test, classes=CIFAR5_CLASSES,
+                     random_labeling=args.random_labeling)
     testset = CIFAR(root='./data', train=False, download=True, transform=transform_test, classes=CIFAR5_CLASSES)
     NTEST = testset.test_data.shape[0]
     NTRAIN = trainset.train_data.shape[0]
