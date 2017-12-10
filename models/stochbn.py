@@ -135,14 +135,21 @@ class _MyBatchNorm(nn.Module):
             self.var_scale.copy_(self.sum_var / self.var_shape / self.n_samples)
 
     def update_smoothed_stats(self):
+        eps = 1e-6
         self.running_m = (1 - self.stats_momentum) * self.running_m + self.stats_momentum * self.cur_mean
         self.running_m2 = (1 - self.stats_momentum) * self.running_m2 + self.stats_momentum * (self.cur_mean ** 2)
 
-        self.running_logvar = (1 - self.stats_momentum) * self.running_logvar + self.stats_momentum * torch.log(self.cur_var)
-        self.running_logvar2 = (1 - self.stats_momentum) * self.running_logvar2 + self.stats_momentum * (torch.log(self.cur_var) ** 2)
+        self.running_logvar = (1 - self.stats_momentum) * self.running_logvar + self.stats_momentum * torch.log(self.cur_var + eps)
+        self.running_logvar2 = (1 - self.stats_momentum) * self.running_logvar2 + self.stats_momentum * (torch.log(self.cur_var + eps) ** 2)
 
         self.running_mean_mean.copy_(self.running_m)
         self.running_mean_var.copy_(self.running_m2 - (self.running_m ** 2))
+
+        # assert not np.any(np.isnan(self.running_logvar.cpu().numpy()))
+        # assert not np.any(np.isnan(self.running_logvar2.cpu().numpy()))
+
+        # assert not np.any(np.isinf(self.running_logvar.cpu().numpy()))
+        # assert not np.any(np.isinf(self.running_logvar2.cpu().numpy()))
 
         self.running_logvar_mean.copy_(self.running_logvar)
         self.running_logvar_var.copy_(self.running_logvar2 - (self.running_logvar ** 2))
@@ -170,6 +177,13 @@ class _MyBatchNorm(nn.Module):
     def forward_stochbn(self, input):
         cur_mean = mean_features(input)
         cur_var = mean_features(input**2) - cur_mean**2
+
+        # try:
+        #     assert not np.any(np.isnan(cur_var.data.cpu().numpy()))
+        #     assert np.all(cur_var.data.cpu().numpy() >= 0)
+        # except:
+        #     np.save('cur_var', cur_var.data.cpu().numpy())
+        #     raise
 
         self.cur_var.copy_(cur_var.data)
         self.cur_mean.copy_(cur_mean.data)
