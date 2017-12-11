@@ -43,6 +43,7 @@ parser.add_argument('--finetune_bn', action='store_true')
 parser.add_argument('--log_grads', action='store_true')
 parser.add_argument('--log_params', action='store_true')
 parser.add_argument('--log_snr', action='store_true')
+parser.add_argument('--train_log', action='store_true')
 parser.add_argument('--noiid', action='store_true')
 parser.add_argument('--learn_bn_stats', action='store_true')
 parser.add_argument('--var_strategy', default='vanilla')
@@ -59,6 +60,7 @@ parser.add_argument('--b1', default=0.9, type=float)
 parser.add_argument('--b2', default=0.999, type=float)
 parser.add_argument('--stop_upd_bnstats', default=None, type=int)
 parser.add_argument('--random_labeling', action='store_true')
+parser.add_argument('--adjust_betas', action='store_true')
 args = parser.parse_args()
 args.script = os.path.basename(__file__)
 
@@ -125,6 +127,8 @@ testloader = torch.utils.data.DataLoader(testset, batch_size=200, shuffle=False,
 
 classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
+
+INIT_EPOCH = 0
 # Model
 if args.resume:
     # Load checkpoint.
@@ -134,6 +138,7 @@ if args.resume:
     net = load_model(args.model)
     best_acc = checkpoint['test_accuracy']
     print('Loaded model test accuracy: {}'.format(best_acc))
+    INIT_EPOCH = checkpoint['epoch']
 else:
     print('==> Building model..')
     net = get_model(n_classes=NCLASSES, **vars(args))
@@ -156,12 +161,12 @@ else:
 criterion = nn.CrossEntropyLoss().cuda()
 optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.weight_decay,
                        betas=(args.b1, args.b2))
+betasscheduler = BetasPolicy(optimizer)
 
 # TODO: manage optimizer state
 if args.resume and not args.finetune_bn:
     # TODO: why it works?
     optimizer.load_state_dict(checkpoint['optimizer'])
-
 
 with open('{}/log'.format(args.log_dir), 'w') as f:
     f.write('#{}\n'.format(make_description(args)))
@@ -209,7 +214,7 @@ model_args['n_classes'] = NCLASSES
 
 print(net)
 
-for epoch in range(args.epochs):
+for epoch in range(INIT_EPOCH, args.epochs):
     set_sample_policy(net, sample_policy=args.sample_policy)
     counter.flush()
 
@@ -226,6 +231,8 @@ for epoch in range(args.epochs):
 
     sample_w = sample_weight_linear(epoch + 1) if args.sample_w_iter else args.sample_w_init
     set_bn_sample_weight(net, sample_w)
+    if args.adjust_betas:
+        betasscheduler.step(sample_w)
 
     if args.sample_stats_from > (epoch + 1):
         if mean_strategy == 'sample':
@@ -284,7 +291,10 @@ for epoch in range(args.epochs):
         counter.add(outputs.data.cpu().numpy(), labels.data.cpu().numpy())
 
     writer.add_scalar('sample_weight', sample_w, epoch + 1)
-    writer.add_scalar('learning_rate', lr, epoch + 1)
+    writer.add_scalar('optimizer/learning_rate', lr, epoch + 1)
+    if isinstance(optimizer, torch.optim.Adam):
+        writer.add_scalar('optimizer/b1(1st param group)', optimizer.param_groups[0]['betas'][0], epoch + 1)
+        writer.add_scalar('optimizer/b2(1st param group)', optimizer.param_groups[0]['betas'][1], epoch + 1)
 
     print(' -- Epoch %d | time: %.4f | loss: %.4f | training acc: %.4f validation accuracy: %.4f | lr %.6f | sample weight %.2f --' %
           (epoch, time() - t0, training_loss, train_acc, counter.acc(), lr, sample_w))
@@ -315,27 +325,33 @@ for epoch in range(args.epochs):
     if best_test_acc < counter.acc():
         best_test_acc = counter.acc()
 
-    if ((epoch + 1) % args.log_n_epochs == 0) or (epoch == 0):
-        big_log = {}
+    big_log = {}
 
-        if args.bn_mode == 'StochBN':
-            # Log SNR of approximated distribution in SBN
-            for i, bn in enumerate([m for m in net.modules() if isinstance(m, _MyBatchNorm)]):
-                eps = 1e-6
-                mean_snr = np.abs(bn.running_mean_mean.cpu().numpy()) / np.sqrt(bn.running_mean_var.cpu().numpy() + eps)
+    # Log SNR of approximated distribution in SBN
+    if args.log_snr:
+        for i, bn in enumerate([m for m in net.modules() if isinstance(m, _MyBatchNorm)]):
+            eps = 1e-6
+            mean_snr = np.abs(bn.running_mean_mean.cpu().numpy()) / np.sqrt(bn.running_mean_var.cpu().numpy() + eps)
+            try:
+                assert np.all(bn.running_logvar_var.cpu().numpy() >= 0)
                 var_snr = 1 / np.sqrt(np.exp(bn.running_logvar_var.cpu().numpy()) - 1 + eps)
-                writer.add_histogram('BN-{}/mean_snr'.format(i + 1), mean_snr, epoch + 1, bins='auto')
-                writer.add_histogram('BN-{}/var_snr'.format(i + 1), var_snr, epoch + 1, bins='auto')
+            except:
+                np.save('bn.running_logvar_var', bn.running_logvar_var.cpu().numpy())
+                raise
 
-                big_log['BN-{}/mean_mean'.format(i + 1)] = bn.running_mean_mean.cpu().numpy()
-                big_log['BN-{}/mean_var'.format(i + 1)] = bn.running_mean_var.cpu().numpy()
+            writer.add_histogram('BN-{}/mean_snr'.format(i + 1), mean_snr, epoch + 1, bins='auto')
+            writer.add_histogram('BN-{}/var_snr'.format(i + 1), var_snr, epoch + 1, bins='auto')
 
-                big_log['BN-{}/logvar_mean'.format(i + 1)] = bn.running_logvar_mean.cpu().numpy()
-                big_log['BN-{}/logvar_var'.format(i + 1)] = bn.running_logvar_var.cpu().numpy()
+            big_log['BN-{}/mean_mean'.format(i + 1)] = bn.running_mean_mean.cpu().numpy()
+            big_log['BN-{}/mean_var'.format(i + 1)] = bn.running_mean_var.cpu().numpy()
 
+            big_log['BN-{}/logvar_mean'.format(i + 1)] = bn.running_logvar_mean.cpu().numpy()
+            big_log['BN-{}/logvar_var'.format(i + 1)] = bn.running_logvar_var.cpu().numpy()
+
+    if args.log_n_epochs and ((epoch + 1) % args.log_n_epochs == 0):
+        if args.bn_mode == 'StochBN':
             # ---------------
             # Calculate ensemble accuracy and loss on TEST set
-
             set_MyBN_strategy(net, var_strategy='sample', mean_strategy='sample')
             set_sample_policy(net, sample_policy='one')
             ens_proba, gt_labels = predict_proba(testloader, net, ensembles=30, n_classes=NCLASSES)
@@ -360,28 +376,28 @@ for epoch in range(args.epochs):
 
             # ------------
             # Calculate ensemble accuracy and loss on TRAIN set
+            if args.train_log:
+                set_MyBN_strategy(net, var_strategy='sample', mean_strategy='sample')
+                set_sample_policy(net, sample_policy='one')
+                ens_proba, gt_labels = predict_proba(trainloader, net, ensembles=30, n_classes=NCLASSES)
+                ens_acc = np.mean(np.argmax(ens_proba, axis=1) == gt_labels)
+                writer.add_scalar('accuracy/ensemble/train', float(ens_acc), global_step=epoch)
+                big_log['ens_proba_train'] = ens_proba
+                big_log['ens_labels_train'] = gt_labels
 
-            set_MyBN_strategy(net, var_strategy='sample', mean_strategy='sample')
-            set_sample_policy(net, sample_policy='one')
-            ens_proba, gt_labels = predict_proba(trainloader, net, ensembles=30, n_classes=NCLASSES)
-            ens_acc = np.mean(np.argmax(ens_proba, axis=1) == gt_labels)
-            writer.add_scalar('accuracy/ensemble/train', float(ens_acc), global_step=epoch)
-            big_log['ens_proba_train'] = ens_proba
-            big_log['ens_labels_train'] = gt_labels
+                ens_loss = -np.log(ens_proba[np.arange(ens_proba.shape[0]), gt_labels])
+                writer.add_scalar('log-loss/ensemble/train', float(np.log(np.mean(ens_loss))),
+                                  global_step=epoch)
 
-            ens_loss = -np.log(ens_proba[np.arange(ens_proba.shape[0]), gt_labels])
-            writer.add_scalar('log-loss/ensemble/train', float(np.log(np.mean(ens_loss))),
-                              global_step=epoch)
+                correct = (np.argmax(ens_proba, axis=1) == gt_labels)
+                writer.add_scalar('log-loss/ensemble/train/correct',
+                                  float(np.log(np.mean(ens_loss[correct]))), global_step=epoch)
+                writer.add_scalar('log-loss/ensemble/train/incorrect',
+                                  float(np.log(np.mean(ens_loss[~correct]))), global_step=epoch)
 
-            correct = (np.argmax(ens_proba, axis=1) == gt_labels)
-            writer.add_scalar('log-loss/ensemble/train/correct',
-                              float(np.log(np.mean(ens_loss[correct]))), global_step=epoch)
-            writer.add_scalar('log-loss/ensemble/train/incorrect',
-                              float(np.log(np.mean(ens_loss[~correct]))), global_step=epoch)
-
-            ens_entropy = entropy(ens_proba)
-            writer.add_histogram('entropy/ensemble/train/correct', ens_entropy[correct], epoch + 1, bins='auto')
-            writer.add_histogram('entropy/ensemble/train/incorrect', ens_entropy[~correct], epoch + 1, bins='auto')
+                ens_entropy = entropy(ens_proba)
+                writer.add_histogram('entropy/ensemble/train/correct', ens_entropy[correct], epoch + 1, bins='auto')
+                writer.add_histogram('entropy/ensemble/train/incorrect', ens_entropy[~correct], epoch + 1, bins='auto')
 
         # -------------
         # Calculate eval mode accuracy and loss on TEST set
@@ -409,26 +425,26 @@ for epoch in range(args.epochs):
 
         # -------------
         # Calculate eval mode accuracy and loss on TRAIN set
+        if args.train_log:
+            set_MyBN_strategy(net, var_strategy='running', mean_strategy='running')
+            set_sample_policy(net, sample_policy='one')
+            eval_proba, gt_labels = predict_proba(trainloader, net, ensembles=1, n_classes=NCLASSES)
+            big_log['eval_proba_train'] = eval_proba
+            big_log['eval_labels_train'] = gt_labels
 
-        set_MyBN_strategy(net, var_strategy='running', mean_strategy='running')
-        set_sample_policy(net, sample_policy='one')
-        eval_proba, gt_labels = predict_proba(trainloader, net, ensembles=1, n_classes=NCLASSES)
-        big_log['eval_proba_train'] = eval_proba
-        big_log['eval_labels_train'] = gt_labels
+            eval_loss = -np.log(eval_proba[np.arange(eval_proba.shape[0]), gt_labels])
+            writer.add_scalar('log-loss/eval/train',
+                              float(np.log(np.mean(eval_loss))), global_step=epoch)
 
-        eval_loss = -np.log(eval_proba[np.arange(eval_proba.shape[0]), gt_labels])
-        writer.add_scalar('log-loss/eval/train',
-                          float(np.log(np.mean(eval_loss))), global_step=epoch)
+            correct = (np.argmax(eval_proba, axis=1) == gt_labels)
+            writer.add_scalar('log-loss/eval/train/correct', float(np.log(np.mean(eval_loss[correct]))), global_step=epoch)
+            writer.add_scalar('log-loss/eval/train/incorrect',
+                              float(np.log(np.mean(eval_loss[~correct]))), global_step=epoch)
 
-        correct = (np.argmax(eval_proba, axis=1) == gt_labels)
-        writer.add_scalar('log-loss/eval/train/correct', float(np.log(np.mean(eval_loss[correct]))), global_step=epoch)
-        writer.add_scalar('log-loss/eval/train/incorrect',
-                          float(np.log(np.mean(eval_loss[~correct]))), global_step=epoch)
-
-        eval_entropy = entropy(eval_proba)
-        correct = (np.argmax(eval_proba, axis=1) == gt_labels)
-        writer.add_histogram('entropy/eval/train/correct', eval_entropy[correct], epoch + 1, bins='auto')
-        writer.add_histogram('entropy/eval/train/incorrect', eval_entropy[~correct], epoch + 1, bins='auto')
+            eval_entropy = entropy(eval_proba)
+            correct = (np.argmax(eval_proba, axis=1) == gt_labels)
+            writer.add_histogram('entropy/eval/train/correct', eval_entropy[correct], epoch + 1, bins='auto')
+            writer.add_histogram('entropy/eval/train/incorrect', eval_entropy[~correct], epoch + 1, bins='auto')
 
         torch.save(big_log, os.path.join(args.log_dir, 'big_log-{}'.format(epoch + 1)))
 
@@ -445,3 +461,4 @@ for epoch in range(args.epochs):
         }, best_test_acc < counter.acc(), epoch + 1)
 
 print('Finish Training')
+
