@@ -93,6 +93,52 @@ class AccCounter:
         self.__sum = 0
 
 
+def adjust_betas(opt, new_betas):
+    """
+    Update betas for Adam optimizer for all param groups.
+    """
+    assert isinstance(opt, torch.optim.Adam)
+    for pg in opt.param_groups:
+        pg['betas'] = new_betas
+
+
+# class LRPolicy(object):
+#     def __init__(self, opt, ):
+
+
+class BetasPolicy(object):
+    """
+    Class for handling betas for Adam optimizer. Use if net have SBN.
+    """
+    def __init__(self, opt, dec=0.1):
+        self.opt = opt
+        self.n_step = 0
+        self.init_betas = []
+        for pg in opt.param_groups:
+            self.init_betas.append(pg['betas'])
+
+        self.prev_sw = 0.
+        self.mult = 1.
+        self.dec = dec
+
+        self.max = 0.99999
+
+    def step(self, sample_weight):
+        """
+        Call it every epoch.
+        """
+        self.n_step += 1
+        for init_b, pg in zip(self.init_betas, self.opt.param_groups):
+            b1, b2 = init_b
+            if self.prev_sw < 1.:
+                pg['betas'] = (b1 + (self.max - b1) * sample_weight, b2 + (self.max - b2) * sample_weight)
+            else:
+                pg['betas'] = (b1 + (self.max - b1) * max(0., self.mult), b2 + (self.max - b2) * max(0., self.mult))
+                self.mult -= self.dec
+
+        self.prev_sw = sample_weight
+
+
 def set_collect(net, mode=True):
     for m in net.modules():
         if isinstance(m, _MyBatchNorm):
@@ -114,7 +160,7 @@ def set_StochBN_train_mode(net, mode):
 
 def get_model(model='ResNet18', **kwargs):
     if 'ResNet' in model:
-        return class_for_name('models', model)()
+        return class_for_name('models', model)(n_classes=kwargs.get('n_classes', 10))
     elif 'VGG' in model:
         return VGG(vgg_name=model, k=kwargs['k'], dropout=kwargs.get('dropout', None),
                    n_classes=kwargs.get('n_classes', 10), )
