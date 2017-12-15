@@ -30,6 +30,7 @@ parser.add_argument('--decrease_from', default=100, type=int, help='Epoch to dec
 parser.add_argument('--log_dir', help='Directory for logging')
 parser.add_argument('--sample_stats_from', type=int, default=1)
 parser.add_argument('--start_tmode', type=int, default=None)
+parser.add_argument('--n_sbn', type=int, default=None)
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
 parser.add_argument('--augmentation', dest='augmentation', action='store_true')
 parser.add_argument('--no-augmentation', dest='augmentation', action='store_false')
@@ -214,6 +215,9 @@ model_args['n_classes'] = NCLASSES
 
 print(net)
 
+bns = [m for m in net.modules() if isinstance(m, _MyBatchNorm)]
+print('{} BN layers'.format(len(bns)))
+
 for epoch in range(INIT_EPOCH, args.epochs):
     set_sample_policy(net, sample_policy=args.sample_policy)
     counter.flush()
@@ -242,6 +246,11 @@ for epoch in range(INIT_EPOCH, args.epochs):
 
     set_MyBN_strategy(net, mean_strategy=mean_strategy, var_strategy=var_strategy)
 
+    if args.n_sbn:
+        for bn in bns[:len(bns) - args.n_sbn]:
+            bn.mean_strategy = 'batch'
+            bn.var_strategy = 'batch'
+
     training_loss = 0
     grad_norms = {}
     for name, param in net.named_parameters():
@@ -253,6 +262,7 @@ for epoch in range(INIT_EPOCH, args.epochs):
 
         # zero the parameter gradients
         optimizer.zero_grad()
+
 
         # forward + backward + optimize
         outputs = net(inputs)
@@ -437,7 +447,8 @@ for epoch in range(INIT_EPOCH, args.epochs):
                               float(np.log(np.mean(eval_loss))), global_step=epoch)
 
             correct = (np.argmax(eval_proba, axis=1) == gt_labels)
-            writer.add_scalar('log-loss/eval/train/correct', float(np.log(np.mean(eval_loss[correct]))), global_step=epoch)
+            writer.add_scalar('log-loss/eval/train/correct', float(np.log(np.mean(eval_loss[correct]))),
+                              global_step=epoch)
             writer.add_scalar('log-loss/eval/train/incorrect',
                               float(np.log(np.mean(eval_loss[~correct]))), global_step=epoch)
 
