@@ -4,7 +4,6 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 import numpy as np
 from torch.autograd import Variable
-import warnings
 
 
 def mean_features(x):
@@ -41,29 +40,12 @@ class _MyBatchNorm(nn.Module):
         self.__global_mode = mode
         self.__update_policy = 'after'
         self.__sample_policy = 'one'
-        self.collect = False
         self.mode = 'vanilla'
         self.n_samples = 0
         self.mean_strategy = 'batch'
         self.var_strategy = 'batch'
-        self.train_mode = 'vanilla'
-        self.test_mode = 'vanilla'
-        self.s = None
-        self.sample_impl = 'straightforward'
 
         self._sum_m = 0
-
-        # self.register_buffer('means', torch.zeros(num_features))
-        # self.register_buffer('vars', torch.ones(num_features))
-        #
-        # self.register_buffer('zeros', torch.zeros(num_features))
-        # self.register_buffer('ones', torch.ones(num_features))
-
-        # self.register_buffer('sum_m', torch.zeros(num_features))
-        # self.register_buffer('sum_m2', torch.zeros(num_features))
-        # self.register_buffer('sum_logvar', torch.zeros(num_features))
-        # self.register_buffer('sum_var', torch.zeros(num_features))
-        # self.register_buffer('sum_var2', torch.zeros(num_features))
 
         self.register_buffer('running_m', torch.zeros(num_features))
         self.register_buffer('running_m2', torch.zeros(num_features))
@@ -80,9 +62,6 @@ class _MyBatchNorm(nn.Module):
             self.register_buffer('running_mean_var', torch.ones(num_features))
             self.register_buffer('running_logvar_mean', torch.zeros(num_features))
             self.register_buffer('running_logvar_var', torch.ones(num_features))
-
-        # self.register_buffer('running_var_shape', torch.zeros(num_features))
-        # self.register_buffer('running_var_scale', torch.zeros(num_features))
 
         self.reset_parameters()
 
@@ -169,20 +148,23 @@ class _MyBatchNorm(nn.Module):
     def forward_id(self, input):
         """
         Implement identity BN layer for easily testing models with no BN layers without changing models implementation.
-        :param input:
-        :return:
+        :param input: tensor
+        :return: input
         """
         return input
 
     def forward_stochbn(self, input):
         cur_mean = mean_features(input)
-        cur_var = mean_features(input**2) - cur_mean**2
+        cur_var = F.relu(mean_features(input**2) - cur_mean**2)
 
         # try:
+        #     assert not np.any(np.isnan(input.data.cpu().numpy()))
+        #     assert not np.any(np.isnan(cur_mean.data.cpu().numpy()))
         #     assert not np.any(np.isnan(cur_var.data.cpu().numpy()))
         #     assert np.all(cur_var.data.cpu().numpy() >= 0)
         # except:
         #     np.save('cur_var', cur_var.data.cpu().numpy())
+        #     # print(self.n_bn_layer)
         #     raise
 
         self.cur_var.copy_(cur_var.data)
@@ -291,14 +273,6 @@ class _MyBatchNorm(nn.Module):
 
         return self.batch_norm(input, means, vars + self.eps)
 
-    # def batch_norm(self, input, means, vars):
-    #     # TODO: implement for any dimensionality
-    #     out = input - means.view(-1, self.num_features, 1, 1)
-    #     out = out / torch.sqrt(vars.view(-1, self.num_features, 1, 1))
-    #     out = out * self.weight.view(1, self.num_features, 1, 1)
-    #     out = out + self.bias.view(1, self.num_features, 1, 1)
-    #     return out
-
     def forward(self, input):
         self._check_input_dim(input)
 
@@ -350,14 +324,3 @@ class MyBatchNorm2d(_MyBatchNorm):
         out = out * self.weight.view(1, self.num_features, 1, 1)
         out = out + self.bias.view(1, self.num_features, 1, 1)
         return out
-
-
-class MyBatchNorm3d(_MyBatchNorm):
-    def __init__(self, *args, **kwargs):
-        raise NotImplemented('')
-
-    def _check_input_dim(self, input):
-        if input.dim() != 5:
-            raise ValueError('expected 5D input (got {}D input)'
-                             .format(input.dim()))
-        super(MyBatchNorm3d, self)._check_input_dim(input)
