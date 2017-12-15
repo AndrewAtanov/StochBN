@@ -159,8 +159,10 @@ def set_StochBN_train_mode(net, mode):
 
 
 def get_model(model='ResNet18', **kwargs):
-    if 'ResNet' in model:
-        return class_for_name('models', model)(n_classes=kwargs.get('n_classes', 10))
+    # if 'ResNet' in model:
+    #     return class_for_name('models', model)(n_classes=kwargs.get('n_classes', 10))
+    if model == 'ResNet18':
+        return ResNet18(n_classes=kwargs.get('n_classes', 10))
     elif 'VGG' in model:
         return VGG(vgg_name=model, k=kwargs['k'], dropout=kwargs.get('dropout', None),
                    n_classes=kwargs.get('n_classes', 10), )
@@ -417,9 +419,10 @@ def predict_proba(dataloader, net, ensembles=1, n_classes=10):
 
 
 def uncertainty_acc(net, known=None, unknown=None, ensembles=50, bn_type='StochBN', n_classes=5,
-                    sample_policy='one', bs=None, vanilla_known=None, vanilla_unknown=None):
+                    sample_policy='one', bs=None, vanilla_known=None, vanilla_unknown=None, n_sbn=None):
     net.eval()
     set_MyBN_strategy(net, mean_strategy='running', var_strategy='running')
+    bns = [m for m in net.modules() if isinstance(m, _MyBatchNorm)]
     kn, unkn = {}, {}
     net.eval()
     p, l = predict_proba(unknown, net, n_classes=n_classes)
@@ -431,6 +434,11 @@ def uncertainty_acc(net, known=None, unknown=None, ensembles=50, bn_type='StochB
 
     if bn_type == 'StochBN':
         set_MyBN_strategy(net, mean_strategy='sample', var_strategy='sample')
+        if n_sbn:
+            for bn in bns[:len(bns) - n_sbn]:
+                bn.mean_strategy = 'batch'
+                bn.var_strategy = 'batch'
+
         p, l = predict_proba(unknown, net, ensembles=ensembles, n_classes=n_classes)
         unkn['ensemble/entropy'] = entropy(p)
 
@@ -439,6 +447,11 @@ def uncertainty_acc(net, known=None, unknown=None, ensembles=50, bn_type='StochB
         kn['ensemble/acc'] = np.mean(p.argmax(1) == l)
 
         set_MyBN_strategy(net, mean_strategy='sample', var_strategy='sample')
+        if n_sbn:
+            for bn in bns[:len(bns) - n_sbn]:
+                bn.mean_strategy = 'batch'
+                bn.var_strategy = 'batch'
+
         p, l = predict_proba(unknown, net, ensembles=1, n_classes=n_classes)
         unkn['one_shot/entropy'] = entropy(p)
 
