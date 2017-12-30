@@ -177,7 +177,8 @@ def get_model(model='ResNet18', **kwargs):
 
 
 def get_dataloader(data='cifar', train_bs=128, test_bs=200, augmentation=True,
-                   noiid=False, shuffle=True, data_root='./data'):
+                   noiid=False, shuffle=True, data_root='./data',
+                   drop_last_train=False, drop_last_test=False):
     transform_train = transforms.Compose([
         MyPad(4),
         transforms.RandomCrop(32),
@@ -217,11 +218,14 @@ def get_dataloader(data='cifar', train_bs=128, test_bs=200, augmentation=True,
         if data != 'cifar':
             raise NotImplementedError
         noiidsampler = CIFARNoIIDSampler(trainset)
-        trainloader = torch.utils.data.DataLoader(trainset, batch_size=train_bs, sampler=noiidsampler, num_workers=2)
+        trainloader = torch.utils.data.DataLoader(trainset, batch_size=train_bs, sampler=noiidsampler,
+                                                  num_workers=2, drop_last=drop_last_train)
     else:
-        trainloader = torch.utils.data.DataLoader(trainset, batch_size=train_bs, shuffle=shuffle, num_workers=2)
+        trainloader = torch.utils.data.DataLoader(trainset, batch_size=train_bs, shuffle=shuffle,
+                                                  num_workers=2, drop_last=drop_last_train)
 
-    testloader = torch.utils.data.DataLoader(testset, batch_size=test_bs, shuffle=False, num_workers=2)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=test_bs, shuffle=False,
+                                             num_workers=2, drop_last=drop_last_test)
 
     return trainloader, testloader
 

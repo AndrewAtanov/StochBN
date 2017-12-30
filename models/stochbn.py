@@ -15,7 +15,7 @@ def mean_features(x):
 
 class _MyBatchNorm(nn.Module):
     def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, mode=None,
-                 learn_stats=False):
+                 learn_stats=False, batch_size=None):
         super(_MyBatchNorm, self).__init__()
         self.num_features = num_features
         self.affine = affine
@@ -24,6 +24,7 @@ class _MyBatchNorm(nn.Module):
         self.stats_momentum = momentum
         self.sample_weight = 1.
         self.learn_stats = learn_stats
+        self.bs = batch_size
         if self.affine:
             self.weight = Parameter(torch.Tensor(num_features))
             self.bias = Parameter(torch.Tensor(num_features))
@@ -273,6 +274,31 @@ class _MyBatchNorm(nn.Module):
 
         return self.batch_norm(input, means, vars + self.eps)
 
+    def forward_uncorr(self, input):
+        """
+        Only for test phase! Not shure in grad flow.
+        """
+        nvirt = input.shape[0] // self.bs
+        nobj = input.shape[0] % self.bs
+        if nobj == 0:
+            nobj = self.bs
+            nvirt -= 1
+
+        cur_mean = mean_features(input[-self.bs:])
+        cur_var = F.relu(mean_features(input[-self.bs:] ** 2) - cur_mean ** 2)
+
+        # self.cur_var.copy_(cur_var.data)
+        # self.cur_mean.copy_(cur_mean.data)
+        virt = []
+        for i in range(nvirt - 1):
+            virt.append(F.batch_norm(input[nobj + self.bs * i: nobj + self.bs * (i + 1)],
+                                     self.running_mean, self.running_var, self.weight, self.bias,
+                                     True, 0., self.eps))
+
+        obj = self.batch_norm(input[:nobj], cur_mean, cur_var + self.eps)
+
+        return torch.cat([obj, ] + virt)
+
     def forward(self, input):
         self._check_input_dim(input)
 
@@ -284,6 +310,8 @@ class _MyBatchNorm(nn.Module):
             return self.forward_id(input)
         elif self.__global_mode == 'smoothed_bn':
             return self.forward_smoothed_bn(input)
+        elif self.__global_mode == 'uncorr':
+            return self.forward_uncorr(input)
         else:
             # warnings.warn('May be problem with this mode, because of refactoring!!!!', DeprecationWarning)
             raise NotImplementedError('No such BN mode {}'.format(self.__global_mode))

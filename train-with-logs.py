@@ -263,7 +263,6 @@ for epoch in range(INIT_EPOCH, args.epochs):
         # zero the parameter gradients
         optimizer.zero_grad()
 
-
         # forward + backward + optimize
         outputs = net(inputs)
         counter.add(outputs.data.cpu().numpy(), labels.data.cpu().numpy())
