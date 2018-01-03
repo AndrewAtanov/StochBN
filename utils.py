@@ -93,6 +93,15 @@ class AccCounter:
         self.__sum = 0
 
 
+def softmax(logits):
+    l = np.exp(logits - logits.max(1)[:, np.newaxis])
+    try:
+        assert not np.isnan(l).any(), 'NaNs while computing softmax'
+        return l / l.sum(1)[:, np.newaxis]
+    except Exception as e:
+        raise e
+
+
 def adjust_betas(opt, new_betas):
     """
     Update betas for Adam optimizer for all param groups.
@@ -406,6 +415,30 @@ def predict_proba_batch(batch, net, ensembles=1):
     return ens.get_proba()
 
 
+def uncorr_bn_ensemble(net, testloader, virtualloader, n_ensembles=50, use_cuda=True):
+    def foo():
+        while True:
+            for x, _ in virtualloader:
+                yield x
+
+    virt_iterator = foo()
+
+    proba = []
+    labels = []
+    for x, y in testloader:
+        ens = Ensemble()
+        for _ in range(n_ensembles):
+            virt_batch = next(virt_iterator)
+            batch = Variable(torch.cat((x, virt_batch)))
+            if use_cuda:
+                batch = batch.cuda()
+            ens.add_estimator(net(batch).data.cpu().numpy())
+        proba.append(ens.get_proba())
+        labels.append(y.tolist())
+
+    return np.concatenate(proba), np.concatenate(labels)
+
+
 def predict_proba(dataloader, net, ensembles=1, n_classes=10):
     proba = np.zeros((len(dataloader.dataset), n_classes))
     labels = []
@@ -431,10 +464,13 @@ def uncertainty_acc(net, known=None, unknown=None, ensembles=50, bn_type='StochB
     net.eval()
     p, l = predict_proba(unknown, net, n_classes=n_classes)
     unkn['eval/entropy'] = entropy(p)
+    unkn['eval/prob'] = np.copy(p)
 
     p, l = predict_proba(known, net, n_classes=n_classes)
     kn['eval/entropy'] = entropy(p)
     kn['eval/acc'] = np.mean(p.argmax(1) == l)
+    kn['eval/prob'] = np.copy(p)
+    kn['eval/labels'] = np.copy(l)
 
     if bn_type == 'StochBN':
         set_MyBN_strategy(net, mean_strategy='sample', var_strategy='sample')
@@ -445,10 +481,13 @@ def uncertainty_acc(net, known=None, unknown=None, ensembles=50, bn_type='StochB
 
         p, l = predict_proba(unknown, net, ensembles=ensembles, n_classes=n_classes)
         unkn['ensemble/entropy'] = entropy(p)
+        unkn['ensemble/prob'] = np.copy(p)
 
         p, l = predict_proba(known, net, ensembles=ensembles, n_classes=n_classes)
         kn['ensemble/entropy'] = entropy(p)
         kn['ensemble/acc'] = np.mean(p.argmax(1) == l)
+        kn['ensemble/prob'] = np.copy(p)
+        kn['ensemble/labels'] = np.copy(l)
 
         set_MyBN_strategy(net, mean_strategy='sample', var_strategy='sample')
         if n_sbn:
@@ -458,30 +497,39 @@ def uncertainty_acc(net, known=None, unknown=None, ensembles=50, bn_type='StochB
 
         p, l = predict_proba(unknown, net, ensembles=1, n_classes=n_classes)
         unkn['one_shot/entropy'] = entropy(p)
+        unkn['one_shot/proba'] = np.copy(p)
 
         p, l = predict_proba(known, net, ensembles=1, n_classes=n_classes)
         kn['one_shot/entropy'] = entropy(p)
         kn['one_shot/acc'] = np.mean(p.argmax(1) == l)
+        kn['one_shot/proba'] = np.copy(p)
+        kn['one_shot/labels'] = np.copy(l)
 
     elif bn_type == 'BN':
         data, labels = vanilla_unknown
         set_MyBN_strategy(net, mean_strategy='batch', var_strategy='batch')
         ens_p = ensemble(net, data, bs, n_infer=ensembles)
         unkn['ensemble/entropy'] = entropy(ens_p)
+        unkn['ensemble/proba'] = np.copy(ens_p)
 
         data, labels = vanilla_known
         ens_p = ensemble(net, data, bs, n_infer=ensembles)
         kn['ensemble/entropy'] = entropy(ens_p)
+        kn['ensemble/proba'] = np.copy(ens_p)
+        kn['ensemble/labels'] = np.copy(labels)
         kn['ensemble/acc'] = np.mean(ens_p.argmax(1) == labels)
 
         data, labels = vanilla_unknown
         set_MyBN_strategy(net, mean_strategy='batch', var_strategy='batch')
         ens_p = ensemble(net, data, bs, n_infer=1)
         unkn['one_shot/entropy'] = entropy(ens_p)
+        unkn['one_shot/proba'] = np.copy(ens_p)
 
         data, labels = vanilla_known
         ens_p = ensemble(net, data, bs, n_infer=1)
         kn['one_shot/entropy'] = entropy(ens_p)
+        kn['one_shot/proba'] = np.copy(ens_p)
+        kn['one_shot/labels'] = np.copy(labels)
         kn['one_shot/acc'] = np.mean(ens_p.argmax(1) == labels)
     else:
         raise NotImplementedError
