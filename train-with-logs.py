@@ -62,6 +62,8 @@ parser.add_argument('--b2', default=0.999, type=float)
 parser.add_argument('--stop_upd_bnstats', default=None, type=int)
 parser.add_argument('--random_labeling', action='store_true')
 parser.add_argument('--adjust_betas', action='store_true')
+parser.add_argument('--at', action='store_true', help='Adversarial training')
+parser.add_argument('--at_eps', default=0.01, type=float)
 args = parser.parse_args()
 args.script = os.path.basename(__file__)
 
@@ -258,16 +260,24 @@ for epoch in range(INIT_EPOCH, args.epochs):
 
     for i, (inputs, labels) in enumerate(trainloader, 0):
         # wrap data in Variable and put them on GPU
-        inputs, labels = Variable(inputs.cuda(async=True)), Variable(labels.cuda(async=True))
+        inputs, labels = Variable(inputs.cuda(async=True), requires_grad=args.at), Variable(labels.cuda(async=True))
 
         # zero the parameter gradients
+
         optimizer.zero_grad()
 
         # forward + backward + optimize
+
         outputs = net(inputs)
         counter.add(outputs.data.cpu().numpy(), labels.data.cpu().numpy())
         loss = criterion(outputs, labels)
         loss.backward()
+
+        if args.at:
+            adversarial = inputs.data.cpu() + args.at_eps * torch.sign(inputs.grad.data.cpu())
+            loss = criterion(net(Variable(adversarial.cuda(async=True))), labels)
+            loss.backward()
+
         optimizer.step()
         training_loss += loss.cpu().data.numpy()[0] * float(inputs.size(0))
 
