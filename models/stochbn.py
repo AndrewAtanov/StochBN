@@ -15,7 +15,7 @@ def mean_features(x):
 
 class _MyBatchNorm(nn.Module):
     def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, mode=None,
-                 learn_stats=False, batch_size=None):
+                 learn_stats=False, batch_size=0):
         super(_MyBatchNorm, self).__init__()
         self.num_features = num_features
         self.affine = affine
@@ -25,6 +25,8 @@ class _MyBatchNorm(nn.Module):
         self.sample_weight = 1.
         self.learn_stats = learn_stats
         self.bs = batch_size
+        self.uncorr_type = 'many-batch'
+        self.nobj = None
         if self.affine:
             self.weight = Parameter(torch.Tensor(num_features))
             self.bias = Parameter(torch.Tensor(num_features))
@@ -278,24 +280,22 @@ class _MyBatchNorm(nn.Module):
         """
         Only for test phase! Not shure in grad flow.
         """
-        nvirt = input.shape[0] // self.bs
-        nobj = input.shape[0] % self.bs
-        if nobj == 0:
-            nobj = self.bs
-            nvirt -= 1
+        assert (input.shape[0] - self.nobj) % self.bs == 0
+        nvirt = (input.shape[0] - self.nobj) // self.bs
 
         cur_mean = mean_features(input[-self.bs:])
         cur_var = F.relu(mean_features(input[-self.bs:] ** 2) - cur_mean ** 2)
 
-        # self.cur_var.copy_(cur_var.data)
-        # self.cur_mean.copy_(cur_mean.data)
+        if self.uncorr_type == 'one-batch':
+            return self.batch_norm(input, cur_mean, cur_var + self.eps)
+
         virt = []
         for i in range(nvirt - 1):
-            virt.append(F.batch_norm(input[nobj + self.bs * i: nobj + self.bs * (i + 1)],
+            virt.append(F.batch_norm(input[self.nobj + self.bs * i: self.nobj + self.bs * (i + 1)],
                                      self.running_mean, self.running_var, self.weight, self.bias,
                                      True, 0., self.eps))
 
-        obj = self.batch_norm(input[:nobj], cur_mean, cur_var + self.eps)
+        obj = self.batch_norm(input[:self.nobj], cur_mean, cur_var + self.eps)
 
         return torch.cat([obj, ] + virt)
 
