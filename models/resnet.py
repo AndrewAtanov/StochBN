@@ -65,8 +65,12 @@ class PreActBlock(nn.Module):
             )
 
     def forward(self, x):
+        is_bn_downsize = self.bn1.global_mode() == 'uncorr' and self.bn1.uncorr_type == 'many-batch'
         out = F.relu(self.bn1(x))
-        shortcut = self.shortcut(out) if hasattr(self, 'shortcut') else x
+        if hasattr(self, 'shortcut'):
+            shortcut = self.shortcut(out[:out.shape[0] - is_bn_downsize * self.bn1.bs])
+        else:
+            shortcut = x[:x.shape[0] - 2 * is_bn_downsize * self.bn1.bs]
         out = self.conv1(out)
         out = self.conv2(F.relu(self.bn2(out)))
         out += shortcut
