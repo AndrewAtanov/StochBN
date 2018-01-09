@@ -40,5 +40,10 @@ for _ in tqdm(range(args.epochs)):
 ckpt['state_dict'] = net.module.state_dict()
 ckpt['tune_epoch'] = args.epochs
 
-fname = utils.uniquify(os.path.join(os.path.dirname(args.model), 'tuned_' + os.path.basename(args.model)), sep='-')
+fname = 'tuned_' + os.path.basename(args.model)
+
+if args.bs != 'auto':
+    fname += '_{}'.format(args.bs)
+
+fname = utils.uniquify(os.path.join(os.path.dirname(args.model), fname), sep='-')
 torch.save(ckpt, fname)

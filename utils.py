@@ -35,15 +35,20 @@ class Ensemble:
     """
     Ensemble for classification. Take logits and average probabilities using softmax.
     """
-    def __init__(self):
+    def __init__(self, save_logits=False):
         self.__n_estimators = 0
         self.cum_proba = 0
+        self.logits = None
+        if save_logits:
+            self.logits = []
 
     def add_estimator(self, logits):
         """
         Add estimator to current ensemble. First call define number of objects (N) and number of classes (K).
         :param logits: ndarray of logits with shape (N, K)
         """
+        if self.logits is not None:
+            self.logits.append(np.copy(logits))
         l = np.exp(logits - logits.max(1)[:, np.newaxis])
         try:
             assert not np.isnan(l).any(), 'NaNs while computing softmax'
@@ -58,6 +63,9 @@ class Ensemble:
         :return: ndarray with probabilities of shape (N, K)
         """
         return self.cum_proba / self.__n_estimators
+
+    def get_logits(self):
+        return np.array(self.logits)
 
 
 class AccCounter:
@@ -93,13 +101,38 @@ class AccCounter:
         self.__sum = 0
 
 
-def softmax(logits):
-    l = np.exp(logits - logits.max(1)[:, np.newaxis])
-    try:
-        assert not np.isnan(l).any(), 'NaNs while computing softmax'
-        return l / l.sum(1)[:, np.newaxis]
-    except Exception as e:
-        raise e
+def softmax(logits, temp=1.):
+    assert not np.isnan(logits).any(), 'NaNs in logits for softmax'
+    if len(logits.shape) == 2:
+        l = np.exp((logits - logits.max(1)[:, np.newaxis]) / temp)
+        try:
+            assert not np.isnan(l).any(), 'NaNs while computing softmax'
+            return l / l.sum(1)[:, np.newaxis]
+        except Exception as e:
+            raise e
+    else:
+        l = np.exp((logits - logits.max(2)[:, :, np.newaxis]) / temp)
+        assert not np.isnan(l).any(), 'NaNs while computing softmax with temp={}'.format(temp)
+        l /= l.sum(2)[:, :, np.newaxis]
+        return np.mean(l, axis=0)
+
+
+def entropy_plot_xy(p):
+    e = entropy(p)
+    n = len(e)
+    return sorted(e), np.arange(1, n + 1) / 1. / n
+
+
+def acc_vs_conf(p, y, t_grid=None, fract=False):
+    if t_grid is None:
+        t_grid = np.linspace(0, 1, 100)
+    c = y == p.argmax(1)
+    conf = p.max(axis=1)
+    m = conf[:, np.newaxis] > t_grid[np.newaxis]
+    acc = np.logical_or(c[:, np.newaxis], ~m)
+    if fract:
+        return t_grid, acc.mean(0), m.mean(0)
+    return t_grid, acc.mean(0)
 
 
 def adjust_betas(opt, new_betas):
@@ -365,6 +398,13 @@ def set_bn_sample_weight(net, val):
             m.sample_weight = val
 
 
+def set_bn_params(net, **kwargs):
+    for m in net.modules():
+        if isinstance(m, _MyBatchNorm):
+            for k, v in kwargs.iteritems():
+                setattr(m, k, v)
+
+
 def to_np(x):
     return x.data.cpu().numpy()
 
@@ -383,14 +423,15 @@ def log_params_info(net, writer, step):
             print('---- ', name)
 
 
-def ensemble(net, data, bs, n_infer=50):
+def ensemble(net, data, bs, n_infer=50, return_logits=False):
     """ Ensemble for net training with Vanilla BN """
     transform_test = transforms.Compose([
         transforms.ToTensor(),
     ])
 
-    ens = Ensemble()
+    ens = Ensemble(save_logits=return_logits)
     acc_data = np.array(list(map(lambda x: transform_test(x).numpy(), data)))
+    logits = []
     for _ in range(n_infer):
         logits = np.zeros([acc_data.shape[0], 5])
         perm = np.random.permutation(np.arange(acc_data.shape[0]))
@@ -403,7 +444,7 @@ def ensemble(net, data, bs, n_infer=50):
             logits[idxs] = outputs.cpu().data.numpy()
 
         ens.add_estimator(logits)
-    return ens.get_proba()
+    return ens.get_proba(), ens.get_logits()
 
 
 def predict_proba_batch(batch, net, ensembles=1):
@@ -415,7 +456,8 @@ def predict_proba_batch(batch, net, ensembles=1):
     return ens.get_proba()
 
 
-def uncorr_bn_ensemble(net, testloader, virtualloader, n_ensembles=50, use_cuda=True):
+def bn_ensemble(net, testloader, virtualloader, n_ensembles=50, use_cuda=True, return_logits=False,
+                vanilla=False):
     def foo():
         while True:
             for x, _ in virtualloader:
@@ -425,26 +467,43 @@ def uncorr_bn_ensemble(net, testloader, virtualloader, n_ensembles=50, use_cuda=
 
     proba = []
     labels = []
+    logits = []
+
     for x, y in testloader:
-        ens = Ensemble()
+        ens = Ensemble(save_logits=return_logits)
+        set_bn_params(net, nobj=x.shape[0])
         for _ in range(n_ensembles):
             virt_batch = next(virt_iterator)
             batch = Variable(torch.cat((x, virt_batch)))
             if use_cuda:
                 batch = batch.cuda()
-            ens.add_estimator(net(batch).data.cpu().numpy())
+            pred = net(batch).data.cpu().numpy()
+            if vanilla:
+                ens.add_estimator(pred[: x.shape[0]])
+            else:
+                ens.add_estimator(pred[:])
         proba.append(ens.get_proba())
         labels.append(y.tolist())
+        if return_logits:
+            logits.append(ens.get_logits())
 
+    if return_logits:
+        logits = np.stack(logits)
+        logits = logits.transpose(0, 2, 1, 3)
+        logits = np.concatenate(logits, axis=0)
+        logits = logits.transpose(1, 0, 2)
+
+        return np.concatenate(proba), np.concatenate(labels), logits
     return np.concatenate(proba), np.concatenate(labels)
 
 
-def predict_proba(dataloader, net, ensembles=1, n_classes=10):
+def predict_proba(dataloader, net, ensembles=1, n_classes=10, return_logits=False):
     proba = np.zeros((len(dataloader.dataset), n_classes))
     labels = []
+    logits = []
     p = 0
     for img, label in dataloader:
-        ens = Ensemble()
+        ens = Ensemble(save_logits=return_logits)
         img = Variable(img).cuda()
         for _ in range(ensembles):
             pred = net(img).data.cpu().numpy()
@@ -452,6 +511,15 @@ def predict_proba(dataloader, net, ensembles=1, n_classes=10):
         proba[p: p + pred.shape[0]] = ens.get_proba()
         p += pred.shape[0]
         labels += label.tolist()
+        if return_logits:
+            logits.append(ens.get_logits())
+
+    if return_logits:
+        logits = np.stack(logits)
+        logits = logits.transpose(0, 2, 1, 3)
+        logits = np.concatenate(logits, axis=0)
+        logits = logits.transpose(1, 0, 2)
+        return proba, np.array(labels), logits
     return proba, np.array(labels)
 
 
@@ -464,12 +532,12 @@ def uncertainty_acc(net, known=None, unknown=None, ensembles=50, bn_type='StochB
     net.eval()
     p, l = predict_proba(unknown, net, n_classes=n_classes)
     unkn['eval/entropy'] = entropy(p)
-    unkn['eval/prob'] = np.copy(p)
+    unkn['eval/proba'] = np.copy(p)
 
     p, l = predict_proba(known, net, n_classes=n_classes)
     kn['eval/entropy'] = entropy(p)
     kn['eval/acc'] = np.mean(p.argmax(1) == l)
-    kn['eval/prob'] = np.copy(p)
+    kn['eval/proba'] = np.copy(p)
     kn['eval/labels'] = np.copy(l)
 
     if bn_type == 'StochBN':
@@ -481,12 +549,12 @@ def uncertainty_acc(net, known=None, unknown=None, ensembles=50, bn_type='StochB
 
         p, l = predict_proba(unknown, net, ensembles=ensembles, n_classes=n_classes)
         unkn['ensemble/entropy'] = entropy(p)
-        unkn['ensemble/prob'] = np.copy(p)
+        unkn['ensemble/proba'] = np.copy(p)
 
         p, l = predict_proba(known, net, ensembles=ensembles, n_classes=n_classes)
         kn['ensemble/entropy'] = entropy(p)
         kn['ensemble/acc'] = np.mean(p.argmax(1) == l)
-        kn['ensemble/prob'] = np.copy(p)
+        kn['ensemble/proba'] = np.copy(p)
         kn['ensemble/labels'] = np.copy(l)
 
         set_MyBN_strategy(net, mean_strategy='sample', var_strategy='sample')
