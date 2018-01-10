@@ -12,6 +12,7 @@ import pickle
 import torchvision
 from torchvision import transforms
 import PIL
+from sklearn.metrics import log_loss
 
 
 def uniquify(path, sep=''):
@@ -133,6 +134,35 @@ def acc_vs_conf(p, y, t_grid=None, fract=False):
     if fract:
         return t_grid, acc.mean(0), m.mean(0)
     return t_grid, acc.mean(0)
+
+
+def ternary_search(f, left, right, absolutePrecision):
+    """
+    Find maximum of unimodal function f() within [left, right]
+    To find the minimum, reverse the if/else statement or reverse the comparison.
+    """
+    while True:
+        # left and right are the current bounds; the maximum is between them
+        if abs(right - left) < absolutePrecision:
+            return (left + right) / 2
+
+        leftThird = left + (right - left) / 3
+        rightThird = right - (right - left) / 3
+
+        if f(leftThird) < f(rightThird):
+            left = leftThird
+        else:
+            right = rightThird
+
+
+def adjust_temp(logits, y, left=1e-4, right=1e2, eps=1e-3, proba=True):
+    if proba:
+        logits = np.log(logits)
+
+    def foo(temp):
+        return -log_loss(y, softmax(logits, temp=temp))
+
+    return ternary_search(foo, left, right, eps)
 
 
 def adjust_betas(opt, new_betas):
