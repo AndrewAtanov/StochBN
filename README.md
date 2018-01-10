@@ -10,7 +10,9 @@ Experiments and StochBN implementation for pytorch.
 
 # Results
 
-1. Test accuracy on CIFAR10 dataset with different BN strategies (100 tries for random) `validation_exp.py`:
+See `exps` for further details.
+
+<!-- 1. Test accuracy on CIFAR10 dataset with different BN strategies (100 tries for random) `validation_exp.py`:
 
 	* __ResNet18__
     <table>
@@ -101,7 +103,7 @@ Experiments and StochBN implementation for pytorch.
 
 2. Comparison of BatchNorm strategies and data augmentation (random crop and flip) on accuracy:
 	![Results](results/resnet18/batch_avg_plot.png)
-
+ -->
 
 # Acknowledgement
 * Thanks https://github.com/kuangliu for models https://github.com/kuangliu/pytorch-cifar
