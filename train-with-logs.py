@@ -26,7 +26,8 @@ parser = argparse.ArgumentParser(description='Net training')
 parser.add_argument('--lr', default=0.001, type=float, help='start learning rate')
 parser.add_argument('--epochs', default=200, type=int, help='number of epochs')
 parser.add_argument('--bs', default=128, type=int, help='batch size')
-parser.add_argument('--decrease_from', default=100, type=int, help='Epoch to decrease lr linear to 0 from')
+parser.add_argument('--test_bs', default=200, type=int, help='batch size for test dataloader')
+parser.add_argument('--decrease_from', default=1, type=int, help='Epoch to decrease lr linear to 0 from')
 parser.add_argument('--log_dir', help='Directory for logging')
 parser.add_argument('--sample_stats_from', type=int, default=1)
 parser.add_argument('--start_tmode', type=int, default=None)
@@ -47,11 +48,11 @@ parser.add_argument('--log_snr', action='store_true')
 parser.add_argument('--train_log', action='store_true')
 parser.add_argument('--noiid', action='store_true')
 parser.add_argument('--learn_bn_stats', action='store_true')
-parser.add_argument('--var_strategy', default='vanilla')
-parser.add_argument('--mean_strategy', default='vanilla')
+parser.add_argument('--var_strategy', default='batch')
+parser.add_argument('--mean_strategy', default='batch')
 parser.add_argument('--sample_policy', default='one')
 parser.add_argument('--update_policy', default='after')
-parser.add_argument('--bn_mode', default='vanilla')
+parser.add_argument('--bn_mode', default='StochBN')
 parser.add_argument('--sample_w_init', type=float, default=0.)
 parser.add_argument('--sample_w_iter', type=int, default=None)
 parser.add_argument('--data', default='cifar')
@@ -100,6 +101,13 @@ if args.data == 'cifar':
     testset = CIFAR(root='./data', train=False, download=True, transform=transform_test)
     NTEST = testset.test_data.shape[0]
     NTRAIN = trainset.train_data.shape[0]
+elif args.data == 'cifar100':
+    NCLASSES = 100
+    trainset = torchvision.datasets.CIFAR100(root='./data', train=True, download=True,
+                                             transform=transform_train if args.augmentation else transform_test)
+    testset = torchvision.datasets.CIFAR100(root='./data', train=False, download=True, transform=transform_test)
+    NTEST = testset.test_data.shape[0]
+    NTRAIN = trainset.train_data.shape[0]
 elif args.data == 'mnist':
     trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True,
                                           transform=transform_train if args.augmentation else transform_test)
@@ -126,7 +134,7 @@ if args.noiid:
 else:
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.bs, shuffle=True, num_workers=2)
 
-testloader = torch.utils.data.DataLoader(testset, batch_size=200, shuffle=False, num_workers=2)
+testloader = torch.utils.data.DataLoader(testset, batch_size=args.test_bs, shuffle=False, num_workers=2)
 
 classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
@@ -481,4 +489,3 @@ for epoch in range(INIT_EPOCH, args.epochs):
         }, best_test_acc < counter.acc(), epoch + 1)
 
 print('Finish Training')
-
