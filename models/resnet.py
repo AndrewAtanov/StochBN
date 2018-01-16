@@ -40,9 +40,10 @@ class BasicBlock(nn.Module):
             )
 
     def forward(self, x):
+        is_bn_downsize = self.bn1.global_mode() == 'uncorr' and self.bn1.uncorr_type == 'many-batch'
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
-        out += self.shortcut(x)
+        out += self.shortcut(x[:x.shape[0] - 2 * is_bn_downsize * self.bn1.bs])
         out = F.relu(out)
         return out
 
@@ -100,10 +101,11 @@ class Bottleneck(nn.Module):
             )
 
     def forward(self, x):
+        is_bn_downsize = self.bn1.global_mode() == 'uncorr' and self.bn1.uncorr_type == 'many-batch'
         out = F.relu(self.bn1(self.conv1(x)))
         out = F.relu(self.bn2(self.conv2(out)))
         out = self.bn3(self.conv3(out))
-        out += self.shortcut(x)
+        out += self.shortcut(x[:x.shape[0] - 3 * is_bn_downsize * self.bn1.bs])
         out = F.relu(out)
         return out
 
@@ -130,8 +132,14 @@ class PreActBottleneck(nn.Module):
             )
 
     def forward(self, x):
+        is_bn_downsize = self.bn1.global_mode() == 'uncorr' and self.bn1.uncorr_type == 'many-batch'
         out = F.relu(self.bn1(x))
-        shortcut = self.shortcut(out) if hasattr(self, 'shortcut') else x
+        # shortcut = self.shortcut(out) if hasattr(self, 'shortcut') else x
+        if hasattr(self, 'shortcut'):
+            shortcut = self.shortcut(out[:out.shape[0] - 2 * is_bn_downsize * self.bn1.bs])
+        else:
+            shortcut = x[:x.shape[0] - 3 * is_bn_downsize * self.bn1.bs]
+
         out = self.conv1(out)
         out = self.conv2(F.relu(self.bn2(out)))
         out = self.conv3(F.relu(self.bn3(out)))
@@ -176,20 +184,20 @@ def ResNet18(n_classes=10):
     return ResNet(PreActBlock, [2, 2, 2, 2], num_classes=n_classes)
 
 
-def ResNet34():
-    return ResNet(BasicBlock, [3, 4, 6, 3])
+def ResNet34(n_classes=10):
+    return ResNet(PreActBlock, [3, 4, 6, 3], num_classes=n_classes)
 
 
-def ResNet50():
-    return ResNet(Bottleneck, [3, 4, 6, 3])
+def ResNet50(n_classes=10):
+    return ResNet(PreActBottleneck, [3, 4, 6, 3], num_classes=n_classes)
 
 
-def ResNet101():
-    return ResNet(Bottleneck, [3, 4, 23, 3])
+def ResNet101(n_classes=10):
+    return ResNet(PreActBottleneck, [3, 4, 23, 3], num_classes=n_classes)
 
 
-def ResNet152():
-    return ResNet(Bottleneck, [3, 8, 36, 3])
+def ResNet152(n_classes=10):
+    return ResNet(PreActBottleneck, [3, 8, 36, 3], num_classes=n_classes)
 
 
 def test():
