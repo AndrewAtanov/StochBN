@@ -13,6 +13,7 @@ import torchvision
 from torchvision import transforms
 import PIL
 from sklearn.metrics import log_loss
+from torch.nn import Dropout
 
 
 def uniquify(path, sep=''):
@@ -51,12 +52,11 @@ class Ensemble:
         if self.logits is not None:
             self.logits.append(np.copy(logits))
         l = np.exp(logits - logits.max(1)[:, np.newaxis])
-        try:
-            assert not np.isnan(l).any(), 'NaNs while computing softmax'
-            self.cum_proba += l / l.sum(1)[:, np.newaxis]
-            assert not np.isnan(self.cum_proba).any(), 'NaNs while computing softmax'
-        except Exception as e:
-            raise e
+
+        assert not np.isnan(l).any(), 'NaNs while computing softmax'
+        self.cum_proba += l / l.sum(1)[:, np.newaxis]
+        assert not np.isnan(self.cum_proba).any(), 'NaNs while computing softmax'
+
         self.__n_estimators += 1
 
     def get_proba(self):
@@ -102,6 +102,10 @@ class AccCounter:
         self.__sum = 0
 
 
+def de_hbn_ensemble(logits, temp=1.):
+    return np.mean([softmax(logits[i], temp=temp) for i in range(logits.shape[0])], 0)
+
+
 def softmax(logits, temp=1.):
     assert not np.isnan(logits).any(), 'NaNs in logits for softmax'
     if len(logits.shape) == 2:
@@ -111,11 +115,22 @@ def softmax(logits, temp=1.):
             return l / l.sum(1)[:, np.newaxis]
         except Exception as e:
             raise e
+    elif len(logits.shape) == 4:
+        return de_hbn_ensemble(logits, temp=temp)
     else:
         l = np.exp((logits - logits.max(2)[:, :, np.newaxis]) / temp)
         assert not np.isnan(l).any(), 'NaNs while computing softmax with temp={}'.format(temp)
         l /= l.sum(2)[:, :, np.newaxis]
         return np.mean(l, axis=0)
+
+
+def softmax2(logits, temp=1.):
+    assert not np.isnan(logits).any(), 'NaNs in logits for softmax'
+    logits = np.exp((logits - logits.max(-1)[..., np.newaxis]) / temp)
+    logits = logits.transpose()
+    while len(logits.shape) > 2:
+        logits = np.mean(logits / logits.sum(2)[:, :, np.newaxis], 2)
+    return logits.transpose()
 
 
 def entropy_plot_xy(p):
@@ -124,9 +139,50 @@ def entropy_plot_xy(p):
     return sorted(e), np.arange(1, n + 1) / 1. / n
 
 
+def entropy_plot_with_proba(p):
+    e = entropy(p)
+    n = len(e)
+    return sorted(e), np.arange(1, n + 1) / 1. / n
+
+
+def entropy_plot_with_logits(logits, adjust_t=False, k=0.2,
+                             labels=None):
+    if len(logits.shape) == 2:
+        logits = logits[np.newaxis]
+
+    temp = 1.
+    if adjust_t:
+        k = int(logits.shape[1] * k)
+        val_logits = logits[:, :k]
+        logits = logits[:, k:]
+        temp = adjust_temp(val_logits, labels[:k])
+    return entropy_plot_with_proba(softmax(logits, temp=temp))
+
+
 def acc_vs_conf(p, y, t_grid=None, fract=False):
     if t_grid is None:
-        t_grid = np.linspace(0, 1, 100)
+        t_grid = np.linspace(0.6, 1, 5000)
+    c = y == p.argmax(1)
+    conf = p.max(axis=1)
+    m = conf[:, np.newaxis] > t_grid[np.newaxis]
+    acc = np.logical_or(c[:, np.newaxis], ~m)
+    if fract:
+        return t_grid, acc.mean(0), m.mean(0)
+    return t_grid, acc.mean(0)
+
+
+def acc_vs_conf_with_logits(logits, y, t_grid=None, fract=False,
+                            adjust_t=False, k=2000):
+    if t_grid is None:
+        t_grid = np.linspace(0.6, 1, 5000)
+
+    temp = 1.
+    if adjust_t:
+        val_logits = logits[:, :, :k]
+        logits = logits[:, :, k:-k]
+        temp = adjust_temp(val_logits, y[:k])
+        y = y[k:-k]
+    p = softmax(logits, temp=temp)
     c = y == p.argmax(1)
     conf = p.max(axis=1)
     m = conf[:, np.newaxis] > t_grid[np.newaxis]
@@ -155,7 +211,7 @@ def ternary_search(f, left, right, absolutePrecision):
             right = rightThird
 
 
-def adjust_temp(logits, y, left=1e-4, right=1e2, eps=1e-3, proba=True):
+def adjust_temp(logits, y, left=1e-4, right=1e2, eps=1e-3, proba=False):
     if proba:
         logits = np.log(logits)
 
@@ -163,6 +219,21 @@ def adjust_temp(logits, y, left=1e-4, right=1e2, eps=1e-3, proba=True):
         return -log_loss(y, softmax(logits, temp=temp))
 
     return ternary_search(foo, left, right, eps)
+
+
+def adjust_temp2(logits, y, k=0.2, left=1e-4, right=1e2, eps=1e-3):
+    assert len(logits.shape) == 4
+
+    k = int(logits.shape[2] * k)
+    val_logits = logits[:, :, :k]
+    val_y = y[:k]
+    logits = logits[:, :, k:]
+
+    def foo(temp):
+        return -log_loss(val_y, softmax(val_logits, temp=temp))
+
+    temp = ternary_search(foo, left, right, eps)
+    return temp, softmax(logits, temp=temp), y[k:]
 
 
 def adjust_betas(opt, new_betas):
@@ -230,18 +301,26 @@ def set_StochBN_train_mode(net, mode):
             m.train_mode = mode
 
 
+def set_do_to_train(net):
+    for m in net.modules():
+        if isinstance(m, Dropout):
+            m.train()
+
+
 def get_model(model='ResNet18', **kwargs):
     # if 'ResNet' in model:
     #     return class_for_name('models', model)(n_classes=kwargs.get('n_classes', 10))
     if model == 'ResNet18':
         return ResNet18(n_classes=kwargs.get('n_classes', 10))
+    elif model == 'ResNet50':
+        return ResNet50(n_classes=kwargs.get('n_classes', 10))
     elif 'VGG' in model:
         return VGG(vgg_name=model, k=kwargs['k'], dropout=kwargs.get('dropout', None),
                    n_classes=kwargs.get('n_classes', 10), )
     elif 'LeNet' == model:
-        return LeNet()
+        return LeNet(dropout=kwargs.get('dropout', None))
     elif 'FC' == model:
-        return FC()
+        return FC(n_classes=kwargs.get('n_classes', 10))
     # elif 'LeNetCifar' == model:
     #     return LeNetCifar(n_classes=kwargs.get('n_classes', None), dropout=kwargs.get('dropout', None))
     else:
@@ -250,7 +329,8 @@ def get_model(model='ResNet18', **kwargs):
 
 def get_dataloader(data='cifar', train_bs=128, test_bs=200, augmentation=True,
                    noiid=False, shuffle=True, data_root='./data',
-                   drop_last_train=False, drop_last_test=False):
+                   drop_last_train=False, drop_last_test=False,
+                   random_labeling=False):
     transform_train = transforms.Compose([
         MyPad(4),
         transforms.RandomCrop(32),
@@ -266,6 +346,10 @@ def get_dataloader(data='cifar', train_bs=128, test_bs=200, augmentation=True,
         trainset = torchvision.datasets.CIFAR10(root=data_root, train=True, download=True,
                                                 transform=transform_train if augmentation else transform_test)
         testset = torchvision.datasets.CIFAR10(root=data_root, train=False, download=True, transform=transform_test)
+    if data == 'cifar100':
+        trainset = torchvision.datasets.CIFAR100(root=data_root, train=True, download=True,
+                                                 transform=transform_train if augmentation else transform_test)
+        testset = torchvision.datasets.CIFAR100(root=data_root, train=False, download=True, transform=transform_test)
     elif data == 'SVHN':
         trainset = torchvision.datasets.SVHN(root=data_root, split='train', download=True,
                                              transform=transform_train if augmentation else transform_test)
@@ -273,11 +357,18 @@ def get_dataloader(data='cifar', train_bs=128, test_bs=200, augmentation=True,
     elif data == 'mnist':
         trainset = torchvision.datasets.MNIST(root=data_root, train=True, download=True, transform=transform_test)
         testset = torchvision.datasets.MNIST(root=data_root, train=False, download=True, transform=transform_test)
+    elif data == 'not-mnist':
+        trainset = torchvision.datasets.MNIST(root=os.path.join(data_root, 'not-mnist'), train=False,
+                                              download=True, transform=transform_test)
+        testset = torchvision.datasets.MNIST(root=os.path.join(data_root, 'not-mnist'), train=False,
+                                             download=True, transform=transform_test)
     elif data == 'cifar5':
         CIFAR5_CLASSES = [0, 1, 2, 3, 4]
         trainset = CIFAR(root=data_root, train=True, download=True,
-                         transform=transform_train if augmentation else transform_test, classes=CIFAR5_CLASSES)
-        testset = CIFAR(root=data_root, train=False, download=True, transform=transform_test, classes=CIFAR5_CLASSES)
+                         transform=transform_train if augmentation else transform_test, classes=CIFAR5_CLASSES,
+                         random_labeling=random_labeling)
+        testset = CIFAR(root=data_root, train=False, download=True, transform=transform_test, classes=CIFAR5_CLASSES,
+                        random_labeling=random_labeling)
     elif data == 'cifar5-rest':
         CIFAR5_CLASSES = [5, 6, 7, 8, 9]
         trainset = CIFAR(root=data_root, train=True, download=True,
@@ -432,6 +523,8 @@ def set_bn_params(net, **kwargs):
     for m in net.modules():
         if isinstance(m, _MyBatchNorm):
             for k, v in kwargs.iteritems():
+                if not hasattr(m, k):
+                    raise RuntimeError('No such SBN params {}'.format(k))
                 setattr(m, k, v)
 
 
@@ -551,6 +644,58 @@ def predict_proba(dataloader, net, ensembles=1, n_classes=10, return_logits=Fals
         logits = logits.transpose(1, 0, 2)
         return proba, np.array(labels), logits
     return proba, np.array(labels)
+
+
+def predict_proba_adversarial(dataloader, net, criterion, ensembles=1, n_classes=10, eps=0.01,
+                              return_logits=False, attack='ensemble'):
+    proba = []
+    adv_proba = []
+    labels = []
+    logits = []
+    adv_logits = []
+    for img, label in dataloader:
+        labels += label.tolist()
+        ens = Ensemble(save_logits=return_logits)
+        img = Variable(img.cuda(), requires_grad=True)
+        label = Variable(label.cuda())
+        net.zero_grad()
+
+        for idx in range(ensembles):
+            pred = net(img)
+            ens.add_estimator(pred.data.cpu().numpy())
+            if idx != 0 and attack == 'sample':
+                continue
+            criterion(pred, label).backward()
+
+        proba.append(ens.get_proba())
+        if return_logits:
+            logits.append(ens.get_logits())
+
+        adversarial = img.data.cpu() + (eps / float(ensembles)) * torch.sign(img.grad.data.cpu())
+        adversarial = Variable(adversarial.cuda(async=True))
+
+        ens = Ensemble(save_logits=return_logits)
+
+        for idx in range(ensembles):
+            pred = net(adversarial)
+            ens.add_estimator(pred.data.cpu().numpy())
+
+        adv_proba.append(ens.get_proba())
+        if return_logits:
+            adv_logits.append(ens.get_logits())
+
+    if return_logits:
+        logits = np.stack(logits)
+        logits = logits.transpose(0, 2, 1, 3)
+        logits = np.concatenate(logits, axis=0)
+        logits = logits.transpose(1, 0, 2)
+
+        adv_logits = np.stack(adv_logits)
+        adv_logits = adv_logits.transpose(0, 2, 1, 3)
+        adv_logits = np.concatenate(adv_logits, axis=0)
+        adv_logits = adv_logits.transpose(1, 0, 2)
+        return (proba, np.array(labels), logits), (adv_proba, adv_logits)
+    return proba, np.array(labels), adv_proba
 
 
 def uncertainty_acc(net, known=None, unknown=None, ensembles=50, bn_type='StochBN', n_classes=5,
