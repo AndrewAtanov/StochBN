@@ -10,6 +10,34 @@ Experiments and StochBN implementation for pytorch.
 
 # Results
 
+__Models__:
+
+* `HBN-T` -- our model with approximation of BatchNorm statistics tuned after network training (with fixed params)
+* `DE` -- DeepEnsembles https://arxiv.org/abs/1612.01474
+* `DO` -- binary Dropout
+
+## CIFAR5
+
+Models trained on first 5 classes of CIFAR10. Entropy of predictive distribution estimated for the rest five classes (solid) and original ones (dashed).
+
+### ResNet18
+
+![](exps/plots/resnet18/cifar5/Entropy_ensembles.png)
+
+### VGG11
+
+![](exps/plots/vgg11/cifar5/Entropy_ensembles.png)
+
+
+## MNIST + notMNIST
+
+### LeNet5
+
+Train on MNIST. Evaluate on MNIST (dashed) and notMNIST (solid)
+
+![](exps/plots/lenet5/mnist/Entropy.png)
+
+
 See `exps` for further details.
 
 <!-- 1. Test accuracy on CIFAR10 dataset with different BN strategies (100 tries for random) `validation_exp.py`:
@@ -26,6 +54,7 @@ See `exps` for further details.
         <td>vanilla</td>
         <td>0.9367</td>
         <td>0.9367</td>
+
         <td>0.9376</td>
       </tr>
       <tr>
