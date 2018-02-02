@@ -319,6 +319,8 @@ def get_model(model='ResNet18', **kwargs):
                    n_classes=kwargs.get('n_classes', 10), )
     elif 'LeNet' == model:
         return LeNet(dropout=kwargs.get('dropout', None))
+    elif 'LeNetv1' == model:
+        return LeNetv1()
     elif 'FC' == model:
         return FC(n_classes=kwargs.get('n_classes', 10))
     # elif 'LeNetCifar' == model:
@@ -671,8 +673,12 @@ def predict_proba_adversarial(dataloader, net, criterion, ensembles=1, n_classes
         if return_logits:
             logits.append(ens.get_logits())
 
-        adversarial = img.data.cpu() + (eps / float(ensembles)) * torch.sign(img.grad.data.cpu())
+        norm = float(ensembles) if attack == 'ensemble' else 1.
+        adversarial = img.data.cpu() + (eps / norm) * torch.sign(img.grad.data.cpu())
         adversarial = Variable(adversarial.cuda(async=True))
+
+        logf = uniquify('exps/lenet5/mnist/de/bs16/no-at/adv', sep='-')
+        np.save(logf, [img.data.cpu().numpy(), adversarial.data.cpu().numpy()])
 
         ens = Ensemble(save_logits=return_logits)
 
@@ -694,7 +700,7 @@ def predict_proba_adversarial(dataloader, net, criterion, ensembles=1, n_classes
         adv_logits = adv_logits.transpose(0, 2, 1, 3)
         adv_logits = np.concatenate(adv_logits, axis=0)
         adv_logits = adv_logits.transpose(1, 0, 2)
-        return (proba, np.array(labels), logits), (adv_proba, adv_logits)
+        return (np.concatenate(proba), np.array(labels), logits), (np.concatenate(adv_proba), adv_logits)
     return proba, np.array(labels), adv_proba
 
 
@@ -879,7 +885,7 @@ class CIFAR(torchvision.datasets.CIFAR10):
             self.test_data = self.test_data.transpose((0, 2, 3, 1))  # convert to HWC
 
 
-def fast_adversarial(x, y, net, loss, eps, is_cuda=True):
+def fast_adversarial(x, y, net, loss, eps, is_cuda=True, get_grad=False):
     """
     Implement fast gradient sign method for constructing adversarial example
 
@@ -903,4 +909,4 @@ def fast_adversarial(x, y, net, loss, eps, is_cuda=True):
     _l = loss(pred, target)
     _l.backward()
 
-    return inp.data.cpu() + eps * torch.sign(inp.grad.data.cpu())
+    return inp.data.cpu() + eps * torch.sign(inp.grad.data.cpu()), torch.sign(inp.grad.data.cpu())
