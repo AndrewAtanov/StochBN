@@ -19,7 +19,7 @@ parser.add_argument('--test_bs', default=500, type=int)
 parser.add_argument('--n_classes', default=5, type=int)
 parser.add_argument('--data_root', default='/home/andrew/StochBN/data')
 parser.add_argument('--adversarial', action='store_true')
-parser.add_argument('--attack', default='ensemble')
+parser.add_argument('--attack', default='sample')
 parser.add_argument('--eps', default=0.01, type=float)
 args = parser.parse_args()
 
@@ -53,12 +53,19 @@ for i in range(args.n_models):
     net.eval()
     for s, mode, n in zip(['running', 'sample'], ['eval', 'ensemble'], [1, args.n_tries]):
         utils.set_MyBN_strategy(net, mean_strategy=s, var_strategy=s)
+        if s == 'ensemble':
+            utils.set_do_to_train(net)
 
         if not args.adversarial:
             _, labels, logits = utils.predict_proba(testloader_kn, net, ensembles=n,
                                                     n_classes=args.n_classes, return_logits=True)
             eval_data['known']['{}/logits'.format(mode)].append(logits)
             eval_data['known']['labels'] = labels
+
+            _, _, logits = utils.predict_proba(testloader_ukn, net, ensembles=n,
+                                               n_classes=args.n_classes, return_logits=True)
+            eval_data['unknown']['{}/logits'.format(mode)].append(logits)
+
         else:
             (_, labels, logits), (_, adv_logits) = utils.predict_proba_adversarial(testloader_kn, net,
                                                                                    criterion, ensembles=n,
@@ -70,12 +77,15 @@ for i in range(args.n_models):
             eval_data['known']['{}/attacks/logits'.format(mode)].append(adv_logits)
             eval_data['known']['labels'] = labels
 
-        _, _, logits = utils.predict_proba(testloader_ukn, net, ensembles=n,
-                                           n_classes=args.n_classes, return_logits=True)
-        eval_data['unknown']['{}/logits'.format(mode)].append(logits)
-
 
 for d, t in product(['known', 'unknown'], ['eval', 'ensemble']):
-    eval_data[d]['{}/logits'.format(t)] = np.squeeze(np.stack(eval_data[d]['{}/logits'.format(t)]))
+    # TODO: get rid of try
+    try:
+        eval_data[d]['{}/logits'.format(t)] = np.squeeze(np.stack(eval_data[d]['{}/logits'.format(t)]))
+    except:
+        pass
+
+    if d == 'known' and args.adversarial:
+        eval_data[d]['{}/attacks/logits'.format(t)] = np.squeeze(np.stack(eval_data[d]['{}/attacks/logits'.format(t)]))
 
 torch.save(eval_data, os.path.join(args.models_dir, args.log_file))
