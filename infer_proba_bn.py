@@ -16,6 +16,8 @@ parser.add_argument('--test_bs', default=500, type=int)
 parser.add_argument('--n_classes', default=5, type=int)
 parser.add_argument('--bn_types', nargs='+', default=['BN', 'uncorr_bn', 'HBN', 'HBN-T'])
 parser.add_argument('--data_root', default='/home/andrew/StochBN/data')
+parser.add_argument('--correction', action='store_true')
+parser.add_argument('--correction_bs', default=None, type=int)
 # parser.add_argument('--model_types', nargs='+', default=['eval', 'ensemble'])
 args = parser.parse_args()
 
@@ -138,6 +140,7 @@ for bn_type in ['HBN', 'HBN-T']:
         hbn_net.eval()
         utils.set_bn_mode(hbn_net, 'StochBN')
         utils.set_MyBN_strategy(hbn_net, mean_strategy='sample', var_strategy='sample')
+        utils.set_bn_params(hbn_net, bs=args.correction_bs, correction=args.correction)
         hbn_net.eval()
         utils.set_do_to_train(hbn_net)
 

@@ -26,6 +26,7 @@ class _MyBatchNorm(nn.Module):
         self.learn_stats = learn_stats
         self.bs = batch_size
         self.uncorr_type = 'many-batch'
+        self.correction = False
         self.nobj = None
         if self.affine:
             self.weight = Parameter(torch.Tensor(num_features))
@@ -207,7 +208,7 @@ class _MyBatchNorm(nn.Module):
                 sampled_var = torch.exp(logvar)
                 vars = cur_var.view(1, self.num_features) * (1. - self.sample_weight) + self.sample_weight * sampled_var
             else:
-                raise NotImplementedError
+                raise NotImplementedError                
         elif self.var_strategy == 'running-mean':
             vars = Variable(torch.exp(self.running_logvar_mean + self.running_logvar_var / 2))
         elif self.var_strategy in ['running', 'running-median']:
@@ -245,6 +246,13 @@ class _MyBatchNorm(nn.Module):
         else:
             self.running_mean.copy_(self.running_mean_mean)
             self.running_var.copy_(torch.exp(self.running_logvar_mean))
+
+        if not self.training and self.correction and self.mean_strategy == 'sample':
+            means = means.view(-1, self.num_features, 1, 1)
+            vars = vars.view(-1, self.num_features, 1, 1) + means ** 2
+            means = (means * float(self.bs) + input.mean(2, keepdim=True).mean(3, keepdim=True)) / (1. + self.bs)
+            vars = (vars * self.bs + (input ** 2).mean(2, keepdim=True).mean(3, keepdim=True)) / (self.bs + 1.)
+            vars = vars - float(self.bs) / (self.bs + 1.) * (means ** 2)
 
         return self.batch_norm(input, means, vars + self.eps)
 
@@ -347,8 +355,11 @@ class MyBatchNorm2d(_MyBatchNorm):
 
     def batch_norm(self, input, means, vars):
         # TODO: implement for any dimensionality
-        out = input - means.view(-1, self.num_features, 1, 1)
-        out = out / torch.sqrt(vars.view(-1, self.num_features, 1, 1))
+        if means.dim() == 1:
+            means = means.view(-1, self.num_features, 1, 1)
+            vars = vars.view(-1, self.num_features, 1, 1)
+        out = input - means
+        out = out / torch.sqrt(vars)
         out = out * self.weight.view(1, self.num_features, 1, 1)
         out = out + self.bias.view(1, self.num_features, 1, 1)
         return out
