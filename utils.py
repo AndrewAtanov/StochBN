@@ -288,7 +288,7 @@ def set_collect(net, mode=True):
             m.collect = mode
 
 
-def set_MyBN_strategy(net, mean_strategy='vanilla', var_strategy='vanilla'):
+def set_MyBN_strategy(net, mean_strategy='running', var_strategy='running'):
     for m in net.modules():
         if isinstance(m, _MyBatchNorm):
             m.mean_strategy = mean_strategy

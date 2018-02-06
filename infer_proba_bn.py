@@ -3,6 +3,7 @@ import argparse
 import utils
 from models.stochbn import _MyBatchNorm
 import os
+import numpy as np
 
 
 parser = argparse.ArgumentParser()
@@ -18,8 +19,13 @@ parser.add_argument('--bn_types', nargs='+', default=['BN', 'uncorr_bn', 'HBN', 
 parser.add_argument('--data_root', default='/home/andrew/StochBN/data')
 parser.add_argument('--correction', action='store_true')
 parser.add_argument('--correction_bs', default=None, type=int)
+parser.add_argument('--seed', default=42, type=int)
 # parser.add_argument('--model_types', nargs='+', default=['eval', 'ensemble'])
 args = parser.parse_args()
+
+torch.cuda.manual_seed_all(args.seed)
+torch.manual_seed(args.seed)
+np.random.seed(args.seed)
 
 if args.model:
     ckpt = torch.load(args.model)
